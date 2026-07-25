@@ -146,6 +146,7 @@ export default function App() {
       season: episode.season,
       number: episode.number,
       episodeName: episode.name,
+      runtimeMinutes: episode.runtime || show.runtime,
     });
   };
 
