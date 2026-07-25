@@ -54,6 +54,25 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
 
   const currentMp4Stream = mp4Candidates[mp4Index]?.url;
 
+  const getMinimumValidDurationSeconds = useCallback(() => {
+    const runtimeMinutes = typeof request.runtimeMinutes === "number" && request.runtimeMinutes > 0
+      ? request.runtimeMinutes
+      : undefined;
+
+    if (request.isMovie) {
+      // Require at least 55% of the expected movie runtime. When runtime data is
+      // unavailable, require 30 minutes so normal trailers and featurettes can
+      // never reach the visible player.
+      return runtimeMinutes
+        ? Math.max(15 * 60, runtimeMinutes * 0.55 * 60)
+        : 30 * 60;
+    }
+
+    return runtimeMinutes
+      ? Math.max(4 * 60, runtimeMinutes * 0.45 * 60)
+      : 6 * 60;
+  }, [request.isMovie, request.runtimeMinutes]);
+
   const copyToClipboard = (url: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     navigator.clipboard.writeText(url);
@@ -138,9 +157,10 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
   }, [isIOS]);
 
   /**
-   * Real-Debrid can occasionally return a short placeholder video stating that
-   * the requested file was removed. Keep every source hidden until its duration
-   * proves it is a real movie or episode, then reveal it to the user.
+   * Keep every browser source hidden until its duration proves it is full-length
+   * content. This blocks Real-Debrid placeholders as well as trailers, teasers,
+   * samples, previews, and other short bonus videos that slipped past metadata
+   * filtering.
    */
   const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | 'invalid' | 'pending' => {
     const duration = video.duration;
@@ -149,14 +169,17 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
       return 'pending';
     }
 
-    // A normal movie or TV episode will never be a 30-second clip.
-    // Allow a little margin because placeholder duration can vary by browser.
-    if (duration <= 45) {
+    const minimumDuration = getMinimumValidDurationSeconds();
+    if (duration < minimumDuration) {
       sourceValidatedRef.current = false;
       setSourceValidated(false);
       setAutoplayBlocked(false);
       setIsLoading(true);
-      setStatusText("Skipping an unavailable source...");
+      setStatusText(
+        request.isMovie
+          ? "Skipping a short preview or trailer..."
+          : "Skipping a short preview or unavailable source..."
+      );
 
       // Defer the source change until the current media event finishes.
       window.setTimeout(() => handleNextMp4Candidate(), 0);
@@ -174,7 +197,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
     }
 
     return 'valid';
-  }, [handleNextMp4Candidate, isIOS]);
+  }, [getMinimumValidDurationSeconds, handleNextMp4Candidate, isIOS, request.isMovie]);
 
   useEffect(() => {
     let active = true;
@@ -222,7 +245,16 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
         }
         
         setStatusText("Finding sources...");
-        const found = await getBestTorrentioStream(activeImdbId, request.season, request.number, request.isMovie ? 'movie' : 'series');
+        const found = await getBestTorrentioStream(
+          activeImdbId,
+          request.season,
+          request.number,
+          request.isMovie ? 'movie' : 'series',
+          {
+            expectedTitle: request.showName,
+            expectedRuntimeMinutes: request.runtimeMinutes
+          }
+        );
         
         if (!active) return;
         
@@ -522,13 +554,15 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
               )}
               {currentMp4Stream && (
                 <div className="flex items-center gap-3 mt-2 pointer-events-auto flex-wrap">
-                  <button
-                    onClick={() => openExternalPlayer(currentMp4Stream)}
-                    className="w-max px-4 py-2 bg-orange-500/80 hover:bg-orange-500 text-slate-900 dark:text-white rounded-full text-sm font-semibold transition-colors flex items-center gap-2 shadow-md"
-                  >
-                    <PlayCircle className="w-4 h-4" />
-                    {vlcLabel}
-                  </button>
+                  {sourceValidated && (
+                    <button
+                      onClick={() => openExternalPlayer(currentMp4Stream)}
+                      className="w-max px-4 py-2 bg-orange-500/80 hover:bg-orange-500 text-slate-900 dark:text-white rounded-full text-sm font-semibold transition-colors flex items-center gap-2 shadow-md"
+                    >
+                      <PlayCircle className="w-4 h-4" />
+                      {vlcLabel}
+                    </button>
+                  )}
                   {mp4Candidates.length > 1 && (
                     <button
                       onClick={() => handleNextMp4Candidate(true)}
