@@ -111,4 +111,5 @@ export interface PlaybackRequest {
   season: number;
   number: number;
   episodeName: string;
+  runtimeMinutes?: number;
 }
