@@ -20,6 +20,125 @@ export interface StreamOption {
   };
 }
 
+export interface StreamSafetyContext {
+  expectedTitle?: string;
+  expectedRuntimeMinutes?: number;
+}
+
+const TRAILER_OR_EXTRA_PATTERNS = [
+  /\btrailer\b/i,
+  /\bteaser\b/i,
+  /\bsample\b/i,
+  /\bpreview\b/i,
+  /\bpromo(?:tional)?\b/i,
+  /\bfeaturette\b/i,
+  /\bbehind[ ._-]*the[ ._-]*scenes\b/i,
+  /\bdeleted[ ._-]*scenes?\b/i,
+  /\bbonus[ ._-]*(?:clip|video|feature|content)\b/i,
+  /\bsneak[ ._-]*peek\b/i,
+  /\btv[ ._-]*spot\b/i,
+  /\binterview\b/i,
+  /\bextras?\b/i,
+  /\bmovie[ ._-]*clip\b/i,
+  /\bofficial[ ._-]*clip\b/i,
+  /\bopening[ ._-]*credits?\b/i,
+  /\bend[ ._-]*credits?\b/i
+];
+
+function getStreamMetadataText(stream: StreamOption): string {
+  return [
+    stream.behaviorHints?.filename,
+    stream.description,
+    stream.title,
+    stream.name
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getStreamText(stream: StreamOption): string {
+  return [getStreamMetadataText(stream), stream.url]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getKnownStreamSizeBytes(stream: StreamOption): number | undefined {
+  const byteSize = stream.behaviorHints?.videoSize;
+  if (typeof byteSize === "number" && Number.isFinite(byteSize) && byteSize > 0) {
+    return byteSize;
+  }
+
+  const sizeGb = getStreamSizeGB(stream);
+  if (sizeGb === null) return undefined;
+  return Math.round(sizeGb * 1024 * 1024 * 1024);
+}
+
+function getMinimumFullLengthBytes(
+  type: 'series' | 'movie',
+  expectedRuntimeMinutes?: number
+): number {
+  const runtime = typeof expectedRuntimeMinutes === "number" && expectedRuntimeMinutes > 0
+    ? expectedRuntimeMinutes
+    : undefined;
+
+  if (type === 'movie') {
+    // Full movies compressed for streaming are normally far larger than trailers.
+    // Runtime scaling keeps the rule strict for long films while still allowing
+    // shorter movies and highly compressed HEVC releases.
+    const minimumMb = Math.max(500, runtime ? runtime * 5.5 : 0);
+    return minimumMb * 1024 * 1024;
+  }
+
+  const minimumMb = Math.max(80, runtime ? runtime * 2.5 : 0);
+  return minimumMb * 1024 * 1024;
+}
+
+function normalizeSafetyText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSafetyInspectionText(stream: StreamOption, expectedTitle?: string): string {
+  let text = normalizeSafetyText(getStreamMetadataText(stream));
+  const normalizedExpectedTitle = expectedTitle ? normalizeSafetyText(expectedTitle) : "";
+
+  // A title itself can legitimately contain words such as "Interview" or
+  // "Trailer". Remove the exact expected title before scanning the remaining
+  // release metadata for trailer and bonus-content labels.
+  if (normalizedExpectedTitle.length >= 2) {
+    text = text.split(normalizedExpectedTitle).join(" ");
+  }
+
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function isLikelyFullLengthStream(
+  stream: StreamOption,
+  type: 'series' | 'movie',
+  safetyContext: StreamSafetyContext
+): boolean {
+  const inspectionText = getSafetyInspectionText(stream, safetyContext.expectedTitle);
+  if (TRAILER_OR_EXTRA_PATTERNS.some(pattern => pattern.test(inspectionText))) {
+    return false;
+  }
+
+  const knownSizeBytes = getKnownStreamSizeBytes(stream);
+  const minimumBytes = getMinimumFullLengthBytes(type, safetyContext.expectedRuntimeMinutes);
+
+  // Movies are handled strictly. An unknown-size movie source cannot be proven
+  // to be full length before it is opened, so it is excluded rather than risk
+  // sending a trailer or bonus clip to the player.
+  if (type === 'movie' && knownSizeBytes === undefined) {
+    return false;
+  }
+
+  return knownSizeBytes === undefined || knownSizeBytes >= minimumBytes;
+}
+
 function getStreamSizeGB(stream: StreamOption): number | null {
   const byteSize = stream.behaviorHints?.videoSize;
   if (typeof byteSize === "number" && byteSize > 0) {
@@ -81,7 +200,13 @@ function isBrowserPlaybackCandidate(stream: StreamOption): boolean {
   );
 }
 
-export async function getBestTorrentioStream(imdbId: string, season: number, episode: number, type: 'series' | 'movie' = 'series'): Promise<PlaybackCandidate[]> {
+export async function getBestTorrentioStream(
+  imdbId: string,
+  season: number,
+  episode: number,
+  type: 'series' | 'movie' = 'series',
+  safetyContext: StreamSafetyContext = {}
+): Promise<PlaybackCandidate[]> {
   if (type === 'series') {
     if (!Number.isInteger(season) || !Number.isInteger(episode) || season < 1 || episode < 1) {
       throw new Error("INVALID_EPISODE_MAPPING");
@@ -156,30 +281,34 @@ export async function getBestTorrentioStream(imdbId: string, season: number, epi
     ).values()
   );
 
-  const candidates = uniqueCandidates.filter(
+  const directCandidates = uniqueCandidates.filter(
     (stream) => typeof stream.url === "string" && stream.url.startsWith("https://")
   );
 
-  if (candidates.length === 0) {
+  if (directCandidates.length === 0) {
     throw new Error(`Sources were found, but none contained a direct Real-Debrid stream.`);
+  }
+
+  const candidates = directCandidates.filter((stream) =>
+    isLikelyFullLengthStream(stream, type, safetyContext)
+  );
+
+  if (candidates.length === 0) {
+    throw new Error(
+      type === "movie"
+        ? "Sources were found, but none could be verified as a full-length movie. Trailer, preview, extra, unknown-size, and undersized files were blocked."
+        : "Sources were found, but only short previews, extras, or undersized files were available."
+    );
   }
   
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
   const playbackCandidates: PlaybackCandidate[] = candidates.map((stream, index) => {
-    const text = [
-      stream.behaviorHints?.filename,
-      stream.description,
-      stream.title,
-      stream.name,
-      stream.url
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
+    const text = getStreamText(stream).toLowerCase();
 
     const seedersCount = getStreamSeeders(stream);
     const browserEligible = isBrowserPlaybackCandidate(stream);
+    const knownSizeBytes = getKnownStreamSizeBytes(stream);
     
     // Start with a base score derived from Torrentio's initial rank
     let score = (candidates.length - index) * 100;
@@ -200,13 +329,19 @@ export async function getBestTorrentioStream(imdbId: string, season: number, epi
     if (text.includes("scr") || text.includes("screener")) score -= 5_000;
 
     score += Math.min(seedersCount, 500);
+
+    // Once safety checks pass, prefer the larger full-length file when quality
+    // and browser compatibility are otherwise similar.
+    if (knownSizeBytes) {
+      score += Math.min(Math.round(knownSizeBytes / (250 * 1024 * 1024)), 100);
+    }
     
     return {
       id: stream.infoHash || stream.url || `candidate-${index}`,
       url: stream.url as string,
       title: stream.title || stream.name,
       quality: stream.name,
-      sizeBytes: stream.behaviorHints?.videoSize,
+      sizeBytes: knownSizeBytes,
       container: browserEligible ? "web-compatible" : "external",
       score,
       seeders: seedersCount
