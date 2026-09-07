@@ -3,7 +3,7 @@ import type { ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactM
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { LibraryTab } from "./components/LibraryTab";
 import { collection, onSnapshot, query, getDocs, writeBatch, setDoc, doc } from "firebase/firestore";
-import { auth, db } from "./firebase";
+import { auth, db, handleFirestoreError, OperationType } from "./firebase";
 import { SwipeableCard } from "./components/SwipeableCard";
 import { ExpandableText } from "./components/ExpandableText";
 
@@ -13,7 +13,6 @@ const SettingsModal = lazy(() => import("./components/SettingsModal").then(m => 
 const SearchModal = lazy(() => import("./components/SearchModal").then(m => ({ default: m.SearchModal })));
 const DetailsModal = lazy(() => import("./components/DetailsModal").then(m => ({ default: m.DetailsModal })));
 const VideoPlayerModal = lazy(() => import("./components/VideoPlayerModal").then(m => ({ default: m.VideoPlayerModal })));
-const RecommendationModal = lazy(() => import("./components/RecommendationModal").then(m => ({ default: m.RecommendationModal })));
 
 import { UserMenu } from "./components/UserMenu";
 import { AddToCalendarButton } from "./components/AddToCalendarButton";
@@ -132,8 +131,11 @@ export default function App() {
   const [playbackRequest, setPlaybackRequest] = useState<PlaybackRequest | null>(null);
   const [toast, setToast] = useState<{message: string, action?: {label: string, onClick: () => void}} | null>(null);
 
-  const handlePlayEpisode = (showId: string, imdbId: string | undefined, episode: UserEpisode) => {
-    const show = shows.find(s => s.id === showId);
+  const handlePlayEpisode = (showId: string, imdbId: string | undefined, episode: UserEpisode, contextEpisodes?: UserEpisode[]) => {
+    let show = shows.find(s => s.id === showId);
+    if (!show && detailsShow?.id === showId) {
+      show = detailsShow;
+    }
     if (!show) return;
     
     setPlaybackRequest({
@@ -146,9 +148,18 @@ export default function App() {
       season: episode.season,
       number: episode.number,
       episodeName: episode.name,
-      runtimeMinutes: episode.runtime || show.runtime,
+      contextEpisodes,
     });
   };
+
+  useEffect(() => {
+    if (user) {
+      const unsubscribe = fetchLibrary();
+      return () => {
+        if (unsubscribe) unsubscribe();
+      };
+    }
+  }, [user]);
 
   useEffect(() => {
     if (toast && !toast.action) {
@@ -159,6 +170,7 @@ export default function App() {
 
   useEffect(() => {
     const updateSW = registerSW({
+      immediate: true,
       onNeedRefresh() {
         setToast({
           message: 'Update available',
@@ -170,6 +182,9 @@ export default function App() {
       },
       onOfflineReady() {
         setToast({ message: 'Ready to work offline' });
+      },
+      onRegisterError(error) {
+        console.error("Service worker registration failed", error);
       }
     });
   }, []);
@@ -239,6 +254,12 @@ const loadWithFallback = async (
 
   const [shows, setShows] = useState<UserShow[]>([]);
   const [episodesMap, setEpisodesMap] = useState<Record<string, UserEpisode[]>>({});
+  
+  const episodesMapRef = useRef<Record<string, UserEpisode[]>>({});
+  useEffect(() => {
+    episodesMapRef.current = episodesMap;
+  }, [episodesMap]);
+
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [addingShowId, setAddingShowId] = useState<number | null>(null);
   const [previewSource, setPreviewSource] = useState<Show | null>(null);
@@ -256,7 +277,6 @@ const loadWithFallback = async (
   const [libraryFilter, setLibraryFilter] = useState<"all" | "watching" | "caught-up" | "ended" | "movies">("all");
   const [librarySearch, setLibrarySearch] = useState("");
   const [librarySort, setLibrarySort] = useState<"name" | "added" | "progress">("added");
-  const [recommendedPick, setRecommendedPick] = useState<{ show: UserShow, nextEp: UserEpisode, progress: number } | null>(null);
   const [isDiscoverLoading, setIsDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const generationRef = useRef(0);
@@ -273,16 +293,32 @@ const loadWithFallback = async (
 
   useEffect(() => {
     return onAuthStateChanged(auth, (u) => {
-      if (!u && user) {
+      if (u?.uid !== user?.uid) {
+        generationRef.current += 1;
+        
         setShows([]);
         setEpisodesMap({});
         setTrendingShows([]);
+        setTrendingMovies([]);
         setPremieringSoon([]);
         setHiddenGems([]);
         setForYou([]);
+        setNetworkShows({});
         setDetailsShow(null);
         setLibraryFilter("all");
+        setLibrarySearch("");
+        setLibrarySort("added");
+        setPreviewSource(null);
+        setAddingShowId(null);
+        setIsSearchOpen(false);
+        setAppError(null);
+        setDiscoverError(null);
+        
+        discoverFetchedRef.current = false;
+        discoverRequestRef.current = null;
+        lastFetchedShowsLengthRef.current = -1;
       }
+      
       setUser(u);
       setLoading(false);
     });
@@ -304,82 +340,188 @@ const loadWithFallback = async (
     }
   }, [user]);
 
+
+
+  type JobState = {
+    inFlight: boolean;
+    lastSuccess: number;
+    failureCount: number;
+    nextAttemptAt: number;
+  };
+
+  const reconcileJobsRef = useRef<Map<string, { eps: JobState, meta: JobState }>>(new Map());
+
+  useEffect(() => {
+    if (!user || shows.length === 0) return;
+    
+    const runReconciliation = async () => {
+      const currentGen = generationRef.current;
+      const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+      const EPISODE_REFRESH_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+      const MAX_BACKOFF = 4 * 60 * 60 * 1000; // 4 hours max backoff
+
+      for (const show of shows) {
+        if (currentGen !== generationRef.current) return;
+        const jobId = show.id;
+        
+        let jobs = reconcileJobsRef.current.get(jobId);
+        if (!jobs) {
+          jobs = {
+            eps: { inFlight: false, lastSuccess: 0, failureCount: 0, nextAttemptAt: 0 },
+            meta: { inFlight: false, lastSuccess: 0, failureCount: 0, nextAttemptAt: 0 }
+          };
+          reconcileJobsRef.current.set(jobId, jobs);
+        }
+
+        const now = Date.now();
+        const numId = typeof show.id === 'string' ? parseInt(show.id, 10) : show.id;
+        let id = show.tvmazeId !== undefined ? show.tvmazeId : numId;
+        const tmdbId = show._tmdbId || (show.isMovie && id < 0 ? (-id - 1000000000) : undefined);
+        
+        // Auto-fix negative TVMaze ID for TV series
+        if (!show.isMovie && id < 0) {
+          try {
+            const resolved = await resolveTVMazeShow({ id, name: show.name, externals: { imdb: show.imdbId }, _tmdbId: show._tmdbId, isMovie: false } as any);
+            if (resolved && resolved.id > 0) {
+              id = resolved.id;
+              if (currentGen === generationRef.current) {
+                await setDoc(doc(db, `users/${user.uid}/shows/${show.id}`), removeUndefined({
+                  tvmazeId: resolved.id,
+                  imdbId: resolved.externals?.imdb || show.imdbId || "none",
+                  status: resolved.status || show.status,
+                  genres: resolved.genres || show.genres || [],
+                  lastRefreshed: now
+                }), { merge: true });
+              }
+            }
+          } catch (e) {
+            console.error("Reconciliation resolution failed for negative ID", show.name, e);
+          }
+        }
+        
+        // Metadata needs logic
+        const CURRENT_AUDIT_VERSION = 1;
+        const needsAudit = (show as any)._auditVersion !== CURRENT_AUDIT_VERSION;
+
+        // Re-check metadata if imdbId is missing, empty, or set to "none", or if 7 days have passed
+        const isImdbInvalid = !show.imdbId || show.imdbId === "none" || show.imdbId === "";
+        const metaDueTime = show.lastRefreshed ? show.lastRefreshed + SEVEN_DAYS : 0;
+        const needsMetadataRefresh = !show.isMovie && id > 0 && (isImdbInvalid || now > metaDueTime || needsAudit);
+        const needsMovieImdb = show.isMovie && (isImdbInvalid || needsAudit);
+
+        // Episode needs logic
+        const epsObj = episodesMapRef.current[jobId];
+        const epsDueTime = jobs.eps.lastSuccess + EPISODE_REFRESH_INTERVAL;
+        const needsEpisodes = !epsObj || now > epsDueTime;
+
+        // Handle Metadata
+        if ((needsMetadataRefresh || needsMovieImdb) && !jobs.meta.inFlight && now >= jobs.meta.nextAttemptAt) {
+          jobs.meta.inFlight = true;
+          (async () => {
+             try {
+               if (needsMovieImdb) {
+                 let resolvedImdb: string | undefined = undefined;
+                 if (tmdbId) {
+                   try {
+                     const extIds = await getTMDBExternalIds(tmdbId, true);
+                     resolvedImdb = extIds.imdb || undefined;
+                   } catch (e) {}
+                 }
+                 if (currentGen === generationRef.current && resolvedImdb) {
+                   await setDoc(doc(db, `users/${user.uid}/shows/${show.id}`), removeUndefined({ imdbId: resolvedImdb, _tmdbId: tmdbId, _auditVersion: CURRENT_AUDIT_VERSION }), { merge: true });
+                 } else if (currentGen === generationRef.current) {
+                   await setDoc(doc(db, `users/${user.uid}/shows/${show.id}`), { _auditVersion: CURRENT_AUDIT_VERSION }, { merge: true });
+                 }
+               } else if (!show.isMovie && id > 0) {
+                 const freshShow = await getShow(id);
+                 let resolvedImdb = freshShow.externals?.imdb;
+                 
+                 if (currentGen === generationRef.current) {
+                   await setDoc(doc(db, `users/${user.uid}/shows/${show.id}`), removeUndefined({
+                       status: freshShow.status || show.status,
+                       imdbId: resolvedImdb || show.imdbId || undefined,
+                       genres: freshShow.genres || show.genres || [],
+                       officialSite: freshShow.officialSite || show.officialSite || "",
+                       lastRefreshed: now,
+                       _auditVersion: CURRENT_AUDIT_VERSION
+                   }), { merge: true });
+                 }
+               }
+               jobs.meta.lastSuccess = now;
+               jobs.meta.failureCount = 0;
+               jobs.meta.nextAttemptAt = 0;
+             } catch (e) {
+               console.error("Meta reconciliation failed for", show.name, e);
+               jobs.meta.failureCount++;
+               jobs.meta.nextAttemptAt = now + Math.min(MAX_BACKOFF, Math.pow(2, jobs.meta.failureCount) * 60000); // starts at 2min, 4min, 8min...
+             } finally {
+               jobs.meta.inFlight = false;
+             }
+          })();
+        }
+
+        // Handle Episodes
+        if (needsEpisodes && !jobs.eps.inFlight && now >= jobs.eps.nextAttemptAt) {
+          jobs.eps.inFlight = true;
+          (async () => {
+             try {
+               const eps = await getShowEpisodes(id, show.watchedEpisodes || {}, show.isMovie, show.premiered);
+               if (currentGen === generationRef.current) {
+                 setEpisodesMap(current => ({ ...current, [show.id]: eps }));
+               }
+               jobs.eps.lastSuccess = now;
+               jobs.eps.failureCount = 0;
+               jobs.eps.nextAttemptAt = 0;
+             } catch (e) {
+               console.error("Episode reconciliation failed for", show.name, e);
+               jobs.eps.failureCount++;
+               jobs.eps.nextAttemptAt = now + Math.min(MAX_BACKOFF, Math.pow(2, jobs.eps.failureCount) * 60000);
+             } finally {
+               jobs.eps.inFlight = false;
+             }
+          })();
+        }
+      }
+    };
+    
+    runReconciliation();
+    
+    const interval = setInterval(runReconciliation, 5 * 60 * 1000); // Check every 5 minutes
+    const onVis = () => { if (document.visibilityState === 'visible') runReconciliation(); };
+    const onOn = () => runReconciliation();
+    
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', onOn);
+    
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('online', onOn);
+    };
+  }, [shows, user]);
+  
   const fetchLibrary = () => {
     if (!user) return;
     
-
-
     setAppError(null);
     const showsRef = collection(db, `users/${user.uid}/shows`);
     const q = query(showsRef);
+    
     return onSnapshot(q, async (snapshot) => {
-      const currentGen = ++generationRef.current;
+      const currentGen = generationRef.current;
       try {
-        const userShows = snapshot.docs.map(d => d.data() as UserShow);
+        const userShows = snapshot.docs.map(d => ({...d.data(), id: d.id} as UserShow));
         setShows(userShows);
         
-        let hasAsyncWork = false;
+        const asyncTasks: Promise<void>[] = [];
+        
         setEpisodesMap(prevEpsMap => {
           const newEpsMap = { ...prevEpsMap };
-          const asyncTasks: Promise<void>[] = [];
-
+          
           snapshot.docChanges().forEach(change => {
-            const show = change.doc.data() as UserShow;
-            if (change.type === 'added') {
-              hasAsyncWork = true;
-              asyncTasks.push((async () => {
-                const id = show.tvmazeId || parseInt(show.id, 10);
-                const eps = await getShowEpisodes(id, show.watchedEpisodes || {}, show.isMovie, show.premiered);
-                setEpisodesMap(current => ({ ...current, [show.id]: eps }));
-                
-                const numId = typeof show.id === 'string' ? parseInt(show.id, 10) : show.id;
-                const tvmazeId = show.tvmazeId;
-                const targetId = tvmazeId !== undefined ? tvmazeId : numId;
-                const tmdbId = show._tmdbId || (show.isMovie && targetId < 0 ? (-targetId - 1000000000) : undefined);
-
-                const currentImdb = show.imdbId;
-                const isImdbNoneOrEmpty = !currentImdb || currentImdb === "none";
-
-                // Automatically resolve missing or "none" IMDb ID in background immediately!
-                if (isImdbNoneOrEmpty) {
-                  try {
-                    if (show.isMovie && tmdbId) {
-                      const extIds = await getTMDBExternalIds(tmdbId, true);
-                      const resolvedImdb = extIds.imdb;
-                      await setDoc(change.doc.ref, removeUndefined({ imdbId: resolvedImdb, _tmdbId: tmdbId }), { merge: true });
-                    } else if (!show.isMovie && id > 0) {
-                      const freshShow = await getShow(id);
-                      const resolvedImdb = freshShow.externals?.imdb;
-                      await setDoc(change.doc.ref, removeUndefined({ 
-                        status: freshShow.status || show.status,
-                        imdbId: resolvedImdb,
-                        genres: freshShow.genres || show.genres || [],
-                        officialSite: freshShow.officialSite || show.officialSite || "",
-                        lastRefreshed: Date.now()
-                      }), { merge: true });
-                    }
-                  } catch (e) {
-                    console.error("Failed to background-resolve IMDb ID for", show.name, e);
-                  }
-                } else {
-                  // Routine refresh for existing shows
-                  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
-                  if (!show.isMovie && id > 0 && (!show.lastRefreshed || Date.now() - show.lastRefreshed > SEVEN_DAYS)) {
-                    try {
-                      const freshShow = await getShow(id);
-                      await setDoc(change.doc.ref, removeUndefined({ 
-                        status: freshShow.status || show.status,
-                        imdbId: freshShow.externals?.imdb || show.imdbId,
-                        genres: freshShow.genres || show.genres || [],
-                        officialSite: freshShow.officialSite || show.officialSite || "",
-                        lastRefreshed: Date.now()
-                      }), { merge: true });
-                    } catch (e) {
-                      console.error("Failed to refresh show", e);
-                    }
-                  }
-                }
-              })());
+            const show = { ...change.doc.data(), id: change.doc.id } as UserShow;
+            if (change.type === 'removed') {
+              delete newEpsMap[show.id];
             } else if (change.type === 'modified') {
               const existingEps = newEpsMap[show.id];
               if (existingEps) {
@@ -388,255 +530,116 @@ const loadWithFallback = async (
                   watched: !!(show.watchedEpisodes && show.watchedEpisodes[ep.id]),
                   watchedAt: show.watchedEpisodes ? (show.watchedEpisodes[ep.id] || undefined) : undefined
                 }));
-              } else {
-                hasAsyncWork = true;
-                asyncTasks.push((async () => {
-                  const id = show.tvmazeId || parseInt(show.id, 10);
-                  const eps = await getShowEpisodes(id, show.watchedEpisodes || {}, show.isMovie, show.premiered);
-                  setEpisodesMap(current => ({ ...current, [show.id]: eps }));
-                })());
               }
-            } else if (change.type === 'removed') {
-              delete newEpsMap[show.id];
             }
           });
-
-          if (hasAsyncWork) {
-            Promise.allSettled(asyncTasks).then(results => {
-              if (currentGen !== generationRef.current) return;
-              results.forEach(r => {
-                if (r.status === 'rejected') console.error("Failed fetching episodes", r.reason);
-              });
-            });
-          }
-
           return newEpsMap;
         });
-
-      } catch (e: any) {
-        if (currentGen !== generationRef.current) return;
-        console.error(e);
-        setAppError("Fetch Error: " + e.message);
+      } catch (err) {
+        console.error("Failed to parse shows snapshot", err);
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `users/${user.uid}/shows`);
     });
   };
-
-  const fetchDiscover = async () => {
-    setIsDiscoverLoading(true);
-    setAppError(null);
-    setDiscoverError(null);
-    try {
-      if (localStorage.getItem("discover_cache_reset_v3") !== "true") {
-        const keysToRemove: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key && (key.startsWith("tmdb_") || key.startsWith("tvmaze_"))) {
-            keysToRemove.push(key);
-          }
-        }
-        keysToRemove.forEach(k => localStorage.removeItem(k));
-        localStorage.setItem("discover_cache_reset_v3", "true");
-      }
-    } catch (e) {}
-
-    const forYouPromise = (async () => {
-      try {
-        const recentShows = shows
-          .slice(-5)
-          .filter(s => Boolean(s.imdbId));
-        
-        const tmdbIds = (await Promise.all(recentShows.map(s => getTMDBIdFromIMDB(s.imdbId!, Boolean(s.isMovie))))).filter(Boolean) as number[];
-        if (tmdbIds.length > 0) {
-          return await loadWithFallback(
-            () => getRecommendationsTMDB(tmdbIds),
-            getForYou
-          );
-        } else {
-          return await loadWithFallback(
-            getForYouTMDB,
-            getForYou
-          );
-        }
-      } catch (e) {
-        console.error(e);
-        return await loadWithFallback(getForYou);
-      }
-    })();
-
-    const request = (async () => {
-      const [
-        trending,
-        movies,
-        premiering,
-        gems,
-        personal
-      ] = await Promise.all([
-        loadWithFallback(getTrendingTMDB, getTrendingTVMaze),
-        loadWithFallback(getTrendingMoviesTMDB),
-        loadWithFallback(getPremieringSoon),
-        loadWithFallback(getHiddenGemsTMDB, getHiddenGems),
-        forYouPromise
-      ]);
-
-      setTrendingShows(trending);
-      setTrendingMovies(movies);
-      setPremieringSoon(premiering);
-      setHiddenGems(gems);
-      setForYou(personal);
-
-      const nextNetworkShows: Record<number, Show[]> = {};
-      for (let index = 0; index < STREAMING_NETWORKS.length; index += 3) {
-        const batch = STREAMING_NETWORKS.slice(index, index + 3);
-        const results = await Promise.all(
-          batch.map(async network => {
-            try {
-              const fetchedShows = await getTopShowsByNetwork(network.id);
-              return {
-                network,
-                shows: normalizeDiscoverShows(fetchedShows)
-              };
-            } catch (error) {
-              console.warn(`Failed to load ${network.name}`, error);
-              return {
-                network,
-                shows: [] as Show[]
-              };
-            }
-          })
-        );
-        results.forEach(result => {
-          nextNetworkShows[result.network.id] = result.shows;
-        });
-      }
-      setNetworkShows(nextNetworkShows);
-    })();
-
-    discoverRequestRef.current = request;
-    try {
-      await request;
-      discoverFetchedRef.current = true;
-    } catch (e) {
-      discoverFetchedRef.current = false;
-      setDiscoverError("Discover could not load right now.");
-    } finally {
-      setIsDiscoverLoading(false);
-      discoverRequestRef.current = null;
-    }
-    return request;
-  };
-
-  useEffect(() => {
-    if (user) {
-      const unsubscribe = fetchLibrary();
-      return () => {
-        if (unsubscribe) unsubscribe();
-      };
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (activeTab === "discover" && !discoverFetchedRef.current && !discoverRequestRef.current) {
-      void fetchDiscover();
-    }
-  }, [activeTab]);
 
   const handleAddShow = async (show: Show, caughtUp: boolean = false) => {
-    setIsSearchOpen(false);
-    setAppError(null);
-    if (addingShowId === show.id) return; // Prevent double clicks
-    
+    if (!user) return false;
     setAddingShowId(show.id);
+    setAppError(null);
     try {
-      let resolvedShow = show;
-      if (show.isMovie) {
-        if (show._tmdbId) {
-          const extIds = await getTMDBExternalIds(show._tmdbId, true);
-          resolvedShow = {
-            ...show,
-            externals: {
-              ...show.externals,
-              imdb: extIds.imdb || ""
-            }
-          };
-        }
-      } else {
-        resolvedShow = await resolveTVMazeShow(show);
+      const { userShow, userEpisodes } = await addShowToLibrary(show, caughtUp);
+      if (userEpisodes && userEpisodes.length > 0) {
+        setEpisodesMap(prev => ({
+          ...prev,
+          [userShow.id]: userEpisodes
+        }));
       }
-      await addShowToLibrary(resolvedShow, caughtUp);
-    } catch (err: any) {
-      console.error(err);
-      setAppError("Add Show Error: " + err.message);
-    } finally {
       setAddingShowId(null);
+      setToast({ message: caughtUp ? `Added ${userShow.name} (Caught Up)` : `Added ${userShow.name} to Next Up` });
+      return true;
+    } catch (err: any) {
+      console.error("Failed to add show:", err);
+      setAppError(err.message || "Failed to add show. Please try again.");
+      setAddingShowId(null);
+      return false;
     }
   };
 
-  const handleToggleWatched = (showId: string, tvmazeId: number, epId: string, watched: boolean) => {
-    let originalEps: UserEpisode[] = [];
+  const toggleWatched = async (showId: string, tvmazeId: number, epId: string, watched: boolean) => {
+    if (!user) return;
+    
+    // Optimistic update
     setEpisodesMap(prev => {
       const eps = prev[showId] || [];
-      originalEps = eps;
       return {
         ...prev,
-        [showId]: eps.map(e => e.id === epId ? { ...e, watched } : e)
+        [showId]: eps.map(e => e.id === epId ? { ...e, watched, watchedAt: watched ? Date.now() : undefined } : e)
       };
     });
-    
-    markEpisodeWatched(tvmazeId, epId, watched).catch(err => {
+
+    try {
+      await markEpisodeWatched(tvmazeId !== undefined ? tvmazeId : parseInt(showId, 10), epId, watched);
+    } catch (err) {
       console.error("Failed to mark watched", err);
-      // Rollback
-      setEpisodesMap(prev => ({
-        ...prev,
-        [showId]: originalEps
-      }));
+      // Rollback specific episode
+      setEpisodesMap(prev => {
+        const eps = prev[showId] || [];
+        return {
+          ...prev,
+          [showId]: eps.map(e => e.id === epId ? { ...e, watched: !watched } : e)
+        };
+      });
       setAppError("Failed to save changes. Please check your connection.");
-    });
-    
-    if (watched) setToast({ message: 'Marked episode watched' });
+    }
   };
 
-  const handleMarkThrough = (showId: string, tvmazeId: number, epIds: string[]) => {
-    let originalEps: UserEpisode[] = [];
+  const handleMarkThrough = async (showId: string, tvmazeId: number, epIds: string[]) => {
+    // Store original watched states for rollback
+    const originalStates: Record<string, boolean> = {};
+    const eps = episodesMap[showId] || [];
+    epIds.forEach(id => {
+      const ep = eps.find(e => e.id === id);
+      if (ep) originalStates[id] = !!ep.watched;
+    });
+
     setEpisodesMap(prev => {
       const eps = prev[showId] || [];
-      originalEps = eps;
       return {
         ...prev,
         [showId]: eps.map(e => epIds.includes(e.id) ? { ...e, watched: true } : e)
       };
     });
     
-    markEpisodesWatchedBatch(tvmazeId, epIds, true).catch(err => {
+    try {
+      await markEpisodesWatchedBatch(tvmazeId, epIds, true);
+    } catch (err) {
       console.error("Failed to batch mark watched", err);
-      // Rollback
-      setEpisodesMap(prev => ({
-        ...prev,
-        [showId]: originalEps
-      }));
+      // Rollback specific episodes
+      setEpisodesMap(prev => {
+        const eps = prev[showId] || [];
+        return {
+          ...prev,
+          [showId]: eps.map(e => epIds.includes(e.id) ? { ...e, watched: originalStates[e.id] } : e)
+        };
+      });
       setAppError("Failed to save changes. Please check your connection.");
-    });
+    }
   };
 
-  const handleRemoveShow = () => {
+  const handleRemoveShow = async () => {
     if (!detailsShow) return;
     const removedShow = detailsShow;
-    const originalShows = [...shows];
-    const originalEpisodes = { ...episodesMap };
     
-    setShows(prev => prev.filter(s => s.id !== detailsShow.id));
-    setEpisodesMap(prev => {
-      const newMap = { ...prev };
-      delete newMap[detailsShow.id];
-      return newMap;
-    });
-    setDetailsShow(null);
-    
-    removeShowFromLibrary(removedShow.tvmazeId).catch(err => {
+    // We shouldn't optimistically remove because it's a big UI change, just wait for network
+    try {
+      await removeShowFromLibrary(removedShow.tvmazeId);
+      setDetailsShow(null);
+      setToast({ message: `Removed ${removedShow.name}` });
+    } catch (err) {
       console.error("Failed to remove show", err);
-      setShows(originalShows);
-      setEpisodesMap(originalEpisodes);
       setAppError("Failed to remove show. Please check your connection.");
-    });
+    }
   };
 
   const { upNext, comingSoon, tonight, filteredLibrary } = useMemo(() => {
@@ -701,7 +704,7 @@ const loadWithFallback = async (
     }
 
     lib.sort((a, b) => {
-      if (librarySort === "name") return a.name.localeCompare(b.name);
+      if (librarySort === "name") return String(a.name || "").localeCompare(String(b.name || ""));
       if (librarySort === "added") return (b.addedAt || 0) - (a.addedAt || 0);
       if (librarySort === "progress") {
         const epsA = episodesMap[a.id] || [];
@@ -718,40 +721,141 @@ const loadWithFallback = async (
 
   useEffect(() => {
     if (shows.length > 0 && Object.keys(episodesMap).length > 0) {
-      const showsWithEps = shows.map(s => ({
-        ...s,
-        episodes: episodesMap[s.id] || s.episodes || []
-      }));
-      checkAndNotifyUpcomingEpisodes(showsWithEps);
+      const runCheck = () => {
+        const showsWithEps = shows.map(s => ({
+          ...s,
+          episodes: episodesMap[s.id] || s.episodes || []
+        }));
+        checkAndNotifyUpcomingEpisodes(showsWithEps);
+      };
+      
+      runCheck();
+      
+      const interval = setInterval(runCheck, 5 * 60 * 1000);
+      
+      const onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') runCheck();
+      };
+      const onOnline = () => {
+        runCheck();
+      };
+      
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      window.addEventListener('online', onOnline);
+      
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        window.removeEventListener('online', onOnline);
+      };
     }
   }, [shows, episodesMap]);
 
-  const handlePickTonight = () => {
-    if (upNext.length === 0) return;
+  const fetchDiscover = async () => {
+    if (discoverFetchedRef.current || discoverRequestRef.current) return;
     
-    if (upNext.length === 1) {
-      setRecommendedPick(upNext[0]);
-      return;
+    setIsDiscoverLoading(true);
+    setDiscoverError(null);
+    
+    try {
+      const p = (async () => {
+        const [
+          trending,
+          movies,
+          premiering,
+          gems,
+          forYouData,
+          networksData
+        ] = await Promise.all([
+          getTrendingTMDB(),
+          getTrendingMoviesTMDB(),
+          getPremieringSoon(),
+          getHiddenGemsTMDB(),
+          getForYouTMDB(),
+          Promise.all(STREAMING_NETWORKS.map(async n => {
+            const shows = await getTopShowsByNetwork(n.id);
+            return { id: n.id, shows };
+          }))
+        ]);
+        
+        setTrendingShows(trending);
+        setTrendingMovies(movies);
+        setPremieringSoon(premiering);
+        setHiddenGems(gems);
+        setForYou(forYouData);
+        
+        const networksMap: Record<number, Show[]> = {};
+        for (const n of networksData) {
+          networksMap[n.id] = n.shows;
+        }
+        setNetworkShows(networksMap);
+        discoverFetchedRef.current = true;
+      })();
+      
+      discoverRequestRef.current = p;
+      await p;
+    } catch (err: any) {
+      console.error("Failed to fetch discover data:", err);
+      setDiscoverError(err.message || "Failed to load discover content");
+    } finally {
+      setIsDiscoverLoading(false);
+      discoverRequestRef.current = null;
     }
+  };
 
-    const sorted = [...upNext].sort((a, b) => {
-      const aWatchedAt = Object.values(a.show.watchedEpisodes || {}).filter(v => v !== null) as number[];
-      const bWatchedAt = Object.values(b.show.watchedEpisodes || {}).filter(v => v !== null) as number[];
-      const aMax = aWatchedAt.length ? Math.max(...aWatchedAt) : 0;
-      const bMax = bWatchedAt.length ? Math.max(...bWatchedAt) : 0;
-      return aMax - bMax; // Oldest first
-    });
-    const pool = sorted.slice(0, Math.max(3, Math.floor(sorted.length / 2)));
-    let picked = pool[Math.floor(Math.random() * pool.length)];
-    if (recommendedPick && pool.length > 1) {
-      let attempts = 0;
-      while (picked.show.id === recommendedPick.show.id && attempts < 10) {
-        picked = pool[Math.floor(Math.random() * pool.length)];
-        attempts++;
+  useEffect(() => {
+    if (activeTab === "discover") {
+      fetchDiscover();
+    }
+  }, [activeTab]);
+
+  const { nextPlaybackRequest, alternativeRequests } = useMemo(() => {
+    if (!playbackRequest) return { alternativeRequests: [] };
+    
+    // Find next episode
+    let nextReq: PlaybackRequest | undefined;
+    const show = shows.find(s => s.id === playbackRequest.showId) || (detailsShow?.id === playbackRequest.showId ? detailsShow : undefined);
+    if (show) {
+      const eps = episodesMap[show.id] || playbackRequest.contextEpisodes || [];
+      const releasedEps = getReleasedEpisodes(eps, false);
+      const currentIndex = releasedEps.findIndex(e => e.season === playbackRequest.season && e.number === playbackRequest.number);
+      if (currentIndex >= 0 && currentIndex < releasedEps.length - 1) {
+        const nextEp = releasedEps[currentIndex + 1];
+        nextReq = {
+          showId: show.id,
+          showName: show.name,
+          isMovie: show.isMovie,
+          imdbId: show.imdbId && show.imdbId !== "none" ? show.imdbId : undefined,
+          _tmdbId: show._tmdbId,
+          tvmazeId: show.tvmazeId,
+          season: nextEp.season,
+          number: nextEp.number,
+          episodeName: nextEp.name,
+        };
       }
     }
-    setRecommendedPick(picked);
-  };
+
+    // Alternative requests for fallback (upNext shows excluding current one)
+    const alts: PlaybackRequest[] = [];
+    upNext
+      .filter(u => u.show.id !== playbackRequest.showId)
+      .slice(0, 3)
+      .forEach(u => {
+        alts.push({
+          showId: u.show.id,
+          showName: u.show.name,
+          isMovie: u.show.isMovie,
+          imdbId: u.show.imdbId && u.show.imdbId !== "none" ? u.show.imdbId : undefined,
+          _tmdbId: u.show._tmdbId,
+          tvmazeId: u.show.tvmazeId,
+          season: u.nextEp.season,
+          number: u.nextEp.number,
+          episodeName: u.nextEp.name,
+        });
+      });
+
+    return { nextPlaybackRequest: nextReq, alternativeRequests: alts };
+  }, [playbackRequest, shows, episodesMap, upNext]);
 
   if (loading) {
     return (
@@ -850,8 +954,8 @@ const loadWithFallback = async (
 
                 {discoverError ? (
                   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center max-w-lg mx-auto mt-12 animate-in fade-in">
-                    <h2 className="text-xl font-display font-bold text-white mb-2">Something went wrong</h2>
-                    <p className="text-slate-400 mb-6 text-sm">{discoverError}</p>
+                    <h2 className="text-xl font-display font-bold text-slate-900 dark:text-white mb-2">Something went wrong</h2>
+                    <p className="text-slate-600 dark:text-slate-400 mb-6 text-sm">{discoverError}</p>
                     <button 
                       onClick={() => fetchDiscover()}
                       className="bg-orange-500 hover:bg-orange-400 text-orange-950 font-bold py-2 px-6 rounded-full text-sm transition-colors"
@@ -859,91 +963,76 @@ const loadWithFallback = async (
                       Try Again
                     </button>
                   </div>
-                ) : isDiscoverLoading ? (
-                  <div className="space-y-10 animate-pulse">
-                    {[1, 2, 3].map((sectionIndex) => (
-                      <div key={sectionIndex}>
-                        <div className="mb-4">
-                          <div className="h-8 bg-slate-200 dark:bg-slate-800 rounded-lg w-48 mb-2"></div>
-                          <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-64"></div>
-                        </div>
-                        <div className="flex gap-4 overflow-hidden">
-                          {[1, 2, 3, 4, 5].map((cardIndex) => (
-                            <div key={cardIndex} className="shrink-0 w-40 md:w-48 lg:w-56 aspect-[2/3] bg-slate-200 dark:bg-slate-800 rounded-xl"></div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
                 ) : (
-                  <div className="space-y-10">
-                    {[
-                      { id: 'for-you', title: 'For You', subtitle: 'Popular starting points.', shows: forYou },
-                      { id: 'trending', title: 'New and trending', subtitle: 'Series drawing attention this week.', shows: trendingShows },
-                      { id: 'trending-movies', title: 'Trending Movies', subtitle: 'Popular movies this week.', shows: trendingMovies },
-                  { id: 'premiering', title: 'Premiering soon', subtitle: 'New series arriving shortly.', shows: premieringSoon },
-                  { id: 'hidden-gems', title: 'Hidden gems', subtitle: 'Strongly rated picks you may have missed.', shows: hiddenGems },
-                  ...STREAMING_NETWORKS.filter(network => networkShows[network.id] && networkShows[network.id].length > 0).map(network => ({
-                    id: `network-${network.id}`,
-                    title: `Top on ${network.name}`,
-                    subtitle: "",
-                    shows: networkShows[network.id]
-                  }))
-                ].map(section => (
-                  <div key={section.id} className="[content-visibility:auto] [contain-intrinsic-size:auto_480px]">
-                    <div className="mb-4">
-                      <h3 className="text-xl font-display font-bold text-slate-900 dark:text-white mb-1">{section.title}</h3>
-                      {section.subtitle && <p className="text-slate-600 dark:text-slate-400 text-base">{section.subtitle}</p>}
-                    </div>
-                    <ScrollRow>
-                      {(section.shows || []).filter((show): show is Show => !!(show && show.id && show.name)).map((show) => {
-                        const inLibrary = shows.some(s => {
-                          if (!s || !show) return false;
-                          if (s.tvmazeId === show.id) return true;
-                          const showYear = show.premiered ? new Date(show.premiered).getFullYear() : null;
-                          const sYear = s.premiered ? new Date(s.premiered).getFullYear() : null;
-                          const sameName = String(s.name || "").toLowerCase() === String(show.name || "").toLowerCase();
-                          if (sameName) {
-                            if (showYear && sYear) return showYear === sYear;
-                            return true;
-                          }
-                          return false;
-                        });
-                        return (
-                          <div key={show.id} className="snap-start shrink-0 w-40 md:w-48 lg:w-56 group relative rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 aspect-[2/3] hover:border-orange-500/50 transition-colors flex flex-col text-left">
-                            <button 
-                              onClick={() => {
-                                const owned = shows.find(s => {
-                                  if (!s || !show) return false;
-                                  if (s.tvmazeId === show.id) return true;
-                                  const showYear = show.premiered ? new Date(show.premiered).getFullYear() : null;
-                                  const sYear = s.premiered ? new Date(s.premiered).getFullYear() : null;
-                                  const sameName = String(s.name || "").toLowerCase() === String(show.name || "").toLowerCase();
-                                  if (sameName) {
-                                    if (showYear && sYear) return showYear === sYear;
-                                    return true;
-                                  }
-                                  return false;
-                                });
-                                setPreviewSource(owned ? null : show);
-                                setDetailsShow(owned || {
-                                  id: show.id.toString(),
-                                  tvmazeId: show.id,
-                                  name: show.name,
-                                  imageUrl: show.image?.medium || show.image?.original || "",
-                                  status: show.status || "Unknown",
-                                  provider: show.webChannel?.name || show.network?.name || "",
-                                  addedAt: Date.now(),
-                                  summary: typeof show.summary === 'string' ? show.summary.replace(/<[^>]+>/g, "") : "",
-                                  imdbId: show.externals?.imdb || "",
-                                  isMovie: !!show.isMovie,
-                                  rating: show.rating || {},
-                                  vote_average: typeof show.vote_average === 'number' ? show.vote_average : 0,
-                                  genres: Array.isArray(show.genres) ? show.genres : [],
-                                  premiered: show.premiered || "",
-                                  _tmdbId: show._tmdbId
-                                });
-                              }}
+                  <>
+                    <div className="space-y-10">
+                      {[
+                        { id: 'for-you', title: 'For You', subtitle: 'Popular starting points.', shows: forYou },
+                        { id: 'trending', title: 'New and trending', subtitle: 'Series drawing attention this week.', shows: trendingShows },
+                        { id: 'trending-movies', title: 'Trending Movies', subtitle: 'Popular movies this week.', shows: trendingMovies },
+                        { id: 'premiering', title: 'Premiering soon', subtitle: 'New series arriving shortly.', shows: premieringSoon },
+                        { id: 'hidden-gems', title: 'Hidden gems', subtitle: 'Strongly rated picks you may have missed.', shows: hiddenGems },
+                        ...STREAMING_NETWORKS.filter(network => networkShows[network.id] && networkShows[network.id].length > 0).map(network => ({
+                          id: `network-${network.id}`,
+                          title: `Top on ${network.name}`,
+                          subtitle: "",
+                          shows: networkShows[network.id]
+                        }))
+                      ].filter(section => section.shows && section.shows.length > 0).map(section => (
+                        <div key={section.id} className="[content-visibility:auto] [contain-intrinsic-size:auto_480px]">
+                          <div className="mb-4">
+                            <h3 className="text-xl font-display font-bold text-slate-900 dark:text-white mb-1">{section.title}</h3>
+                            {section.subtitle && <p className="text-slate-600 dark:text-slate-400 text-base">{section.subtitle}</p>}
+                          </div>
+                          <ScrollRow>
+                            {(section.shows || []).filter((show): show is Show => !!(show && show.id && show.name)).map((show) => {
+                              const inLibrary = shows.some(s => {
+                                if (!s || !show) return false;
+                                if (s.tvmazeId === show.id) return true;
+                                const showYear = show.premiered ? new Date(show.premiered).getFullYear() : null;
+                                const sYear = s.premiered ? new Date(s.premiered).getFullYear() : null;
+                                const sameName = String(s.name || "").toLowerCase() === String(show.name || "").toLowerCase();
+                                if (sameName) {
+                                  if (showYear && sYear) return showYear === sYear;
+                                  return true;
+                                }
+                                return false;
+                              });
+                              return (
+                                <div key={show.id} className="snap-start shrink-0 w-40 md:w-48 lg:w-56 group relative rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 aspect-[2/3] hover:border-orange-500/50 transition-colors flex flex-col text-left">
+                                  <button 
+                                    onClick={() => {
+                                      const owned = shows.find(s => {
+                                        if (!s || !show) return false;
+                                        if (s.tvmazeId === show.id) return true;
+                                        const showYear = show.premiered ? new Date(show.premiered).getFullYear() : null;
+                                        const sYear = s.premiered ? new Date(s.premiered).getFullYear() : null;
+                                        const sameName = String(s.name || "").toLowerCase() === String(show.name || "").toLowerCase();
+                                        if (sameName) {
+                                          if (showYear && sYear) return showYear === sYear;
+                                          return true;
+                                        }
+                                        return false;
+                                      });
+                                      setPreviewSource(owned ? null : show);
+                                      setDetailsShow(owned || {
+                                        id: show.id.toString(),
+                                        tvmazeId: show.id,
+                                        name: show.name,
+                                        imageUrl: show.image?.medium || show.image?.original || "",
+                                        status: show.status || "Unknown",
+                                        provider: show.webChannel?.name || show.network?.name || "",
+                                        addedAt: Date.now(),
+                                        summary: typeof show.summary === 'string' ? show.summary.replace(/<[^>]+>/g, "") : "",
+                                        imdbId: show.externals?.imdb || "",
+                                        isMovie: !!show.isMovie,
+                                        rating: show.rating || {},
+                                        vote_average: typeof show.vote_average === 'number' ? show.vote_average : 0,
+                                        genres: Array.isArray(show.genres) ? show.genres : [],
+                                        premiered: show.premiered || "",
+                                        _tmdbId: show._tmdbId
+                                      });
+                                    }}
                               className="absolute inset-0 z-10 touch-manipulation"
                             >
                               <span className="sr-only">View Details for {show.name}</span>
@@ -994,7 +1083,25 @@ const loadWithFallback = async (
                     </ScrollRow>
                   </div>
                 ))}
+                {isDiscoverLoading && (
+                  <div className="space-y-10 animate-pulse mt-10">
+                    {[1, 2].map((sectionIndex) => (
+                      <div key={sectionIndex}>
+                        <div className="mb-4">
+                          <div className="h-8 bg-slate-200 dark:bg-slate-800 rounded-lg w-48 mb-2"></div>
+                          <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-64"></div>
+                        </div>
+                        <div className="flex gap-4 overflow-hidden">
+                          {[1, 2, 3, 4, 5].map((cardIndex) => (
+                            <div key={cardIndex} className="shrink-0 w-40 md:w-48 lg:w-56 aspect-[2/3] bg-slate-200 dark:bg-slate-800 rounded-xl"></div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
+              </>
               )}
             </div>
           </section>
@@ -1008,20 +1115,6 @@ const loadWithFallback = async (
               <h2 className="text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">Ready to watch</h2>
               <p className="text-slate-600 dark:text-slate-400">Pick up exactly where you left off.</p>
             </div>
-            {upNext.length > 1 && (
-              <button 
-                onClick={handlePickTonight}
-                className="w-full mb-6 p-4 rounded-2xl bg-gradient-to-r from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 flex items-center justify-between hover:from-indigo-500/30 hover:to-purple-500/30 transition-colors group text-left cursor-pointer"
-              >
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">What should we watch tonight?</h3>
-                  <p className="text-sm text-slate-700 dark:text-slate-300">Let us pick from your queue</p>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center group-active:scale-95 transition-transform shrink-0 shadow-xl shadow-indigo-500/20">
-                  <PlayCircle className="w-5 h-5 text-slate-900 dark:text-white" />
-                </div>
-              </button>
-            )}
             
             {upNext.length === 0 && (shows.length === 0 || Object.keys(episodesMap).length >= shows.length) ? (
               <div className="bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 border-dashed rounded-3xl p-12 text-center">
@@ -1031,7 +1124,7 @@ const loadWithFallback = async (
             ) : upNext.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {upNext.map(({ show, nextEp, progress }) => (
-                  <SwipeableCard key={show.id} onMark={() => handleToggleWatched(show.id, show.tvmazeId, nextEp.id, true)}>
+                  <SwipeableCard key={show.id} onMark={() => toggleWatched(show.id, show.tvmazeId, nextEp.id, true)}>
                   <article className="relative min-h-[420px] bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-3xl overflow-hidden shadow-xl flex flex-col justify-end hover:border-slate-300 dark:hover:border-slate-700 transition-all group">
                     {/* Background Backdrop Image */}
                     <div className="absolute inset-0 z-0">
@@ -1045,7 +1138,7 @@ const loadWithFallback = async (
                           className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-all duration-500" 
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-slate-100 dark:bg-slate-900 text-slate-300 dark:text-slate-800 text-6xl font-bold">{show.name[0]}</div>
+                        <div className="w-full h-full flex items-center justify-center bg-slate-100 dark:bg-slate-900 text-slate-300 dark:text-slate-800 text-6xl font-bold">{(show.name || "?")[0]}</div>
                       )}
                       {/* Premium gradual gradient overlay */}
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/35 to-transparent" />
@@ -1073,9 +1166,9 @@ const loadWithFallback = async (
                         {show.isMovie ? "Feature Film" : `S${nextEp.season} E${nextEp.number} · ${nextEp.name}`}
                       </div>
                       
-                      {(nextEp.airstamp || nextEp.airdate) && (
+                      {getEpisodeReleaseTime(nextEp) && (
                         <div className="text-[11px] font-bold text-orange-400/90 uppercase tracking-wider mb-2">
-                          Aired {format(new Date(nextEp.airstamp || nextEp.airdate), "MMM d, yyyy")}
+                          Aired {format(getEpisodeReleaseTime(nextEp) || new Date(), "MMM d, yyyy")}
                         </div>
                       )}
                       
@@ -1093,7 +1186,7 @@ const loadWithFallback = async (
                       
                       <div className="flex gap-2.5 pointer-events-auto">
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleToggleWatched(show.id, show.tvmazeId, nextEp.id, true); }}
+                          onClick={(e) => { e.stopPropagation(); toggleWatched(show.id, show.tvmazeId, nextEp.id, true); }}
                           className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 text-white text-sm font-semibold rounded-xl transition-all border border-white/10 flex items-center justify-center gap-1.5 active:scale-95 shadow-md"
                         >
                           <CheckCircle2 className="w-4 h-4 text-orange-400" />
@@ -1145,7 +1238,7 @@ const loadWithFallback = async (
                       </div>
                       <div className="flex-1 min-w-0 relative z-0">
                         <div className="flex items-center gap-2 mb-1 min-w-0">
-                          <span className="text-xs font-bold uppercase tracking-wider text-orange-400 whitespace-nowrap shrink-0">Tonight &middot; {format(new Date(nextEp.airstamp), "h:mm a")}</span>
+                          <span className="text-xs font-bold uppercase tracking-wider text-orange-400 whitespace-nowrap shrink-0">Tonight &middot; {format(getEpisodeReleaseTime(nextEp) || new Date(), "h:mm a")}</span>
                           {show.provider && show.provider !== "Unknown Provider" && show.provider !== "Unknown" && (
                             <span className="text-xs text-slate-500 dark:text-slate-400 truncate">&middot; {show.provider}</span>
                           )}
@@ -1165,7 +1258,7 @@ const loadWithFallback = async (
                             season={nextEp.season}
                             number={nextEp.number}
                             epTitle={nextEp.name}
-                            airstamp={nextEp.airstamp}
+                            airstamp={getEpisodeReleaseTime(nextEp)?.toISOString() || ""}
                             runtimeMinutes={show.runtime}
                           />
                         </div>
@@ -1211,16 +1304,16 @@ const loadWithFallback = async (
                       <div className="flex flex-wrap items-center gap-2.5 mt-2 relative z-20 pointer-events-auto">
                         <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-500/10 rounded-xl border border-orange-500/20 text-orange-400 text-xs font-bold tracking-wide uppercase">
                           <Calendar className="w-3.5 h-3.5 shrink-0" />
-                          <span>{format(new Date(nextEp.airstamp), "MMM d")}</span>
+                          <span>{format(getEpisodeReleaseTime(nextEp) || new Date(), "MMM d")}</span>
                           <span className="opacity-40">&middot;</span>
-                          <span className="text-orange-300/90 font-medium">in {formatDistanceToNow(new Date(nextEp.airstamp))}</span>
+                          <span className="text-orange-300/90 font-medium">in {formatDistanceToNow(getEpisodeReleaseTime(nextEp) || new Date())}</span>
                         </div>
                         <AddToCalendarButton 
                           showName={show.name}
                           season={nextEp.season}
                           number={nextEp.number}
                           epTitle={nextEp.name}
-                          airstamp={nextEp.airstamp}
+                          airstamp={getEpisodeReleaseTime(nextEp)?.toISOString() || ""}
                           runtimeMinutes={show.runtime}
                         />
                       </div>
@@ -1312,17 +1405,18 @@ const loadWithFallback = async (
           onClose={() => { setDetailsShow(null); setPreviewSource(null); }}
           onRemove={() => {
             handleRemoveShow();
-            setToast({ message: `Removed from library` });
           }}
-          onToggleWatched={(epId, watched) => handleToggleWatched(detailsShow.id, detailsShow.tvmazeId, epId, watched)}
+          onToggleWatched={(epId, watched) => toggleWatched(detailsShow.id, detailsShow.tvmazeId, epId, watched)}
           onMarkThrough={(epIds) => handleMarkThrough(detailsShow.id, detailsShow.tvmazeId, epIds)}
           inLibrary={shows.some(s => s.tvmazeId === detailsShow.tvmazeId || (!!s.imdbId && s.imdbId === detailsShow.imdbId))}
-          onAdd={(caughtUp) => {
+          onAdd={async (caughtUp) => {
             if (previewSource) {
-              handleAddShow(previewSource, caughtUp);
-              setToast({ message: `Added ${previewSource.name}` });
-              setDetailsShow(null);
-              setPreviewSource(null);
+              const success = await handleAddShow(previewSource, caughtUp);
+              if (success) {
+                setToast({ message: `Added ${previewSource.name}` });
+                setDetailsShow(null);
+                setPreviewSource(null);
+              }
             }
           }}
           addingShowId={addingShowId}
@@ -1334,26 +1428,12 @@ const loadWithFallback = async (
       {playbackRequest && (
         <VideoPlayerModal 
           request={playbackRequest}
+          nextRequest={nextPlaybackRequest}
+          alternativeRequests={alternativeRequests}
+          onPlayNext={req => {
+            handlePlayEpisode(req.showId, req.imdbId, { season: req.season, number: req.number, name: req.episodeName, id: "", showId: 0, airdate: "", airstamp: "", imageUrl: "", summary: "", watched: false }, playbackRequest.contextEpisodes);
+          }}
           onClose={() => setPlaybackRequest(null)}
-        />
-      )}
-
-      {recommendedPick && (
-        <RecommendationModal
-          isOpen={!!recommendedPick}
-          onClose={() => setRecommendedPick(null)}
-          show={recommendedPick.show}
-          episode={recommendedPick.nextEp}
-          progress={recommendedPick.progress}
-          onPlayEpisode={(showId, imdbId, episode) => {
-            handlePlayEpisode(showId, imdbId, episode);
-            setRecommendedPick(null);
-          }}
-          onViewDetails={(show) => {
-            setDetailsShow(show);
-            setRecommendedPick(null);
-          }}
-          onReroll={handlePickTonight}
         />
       )}
     </div>

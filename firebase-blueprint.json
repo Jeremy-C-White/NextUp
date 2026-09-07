@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" }
+      },
+      "required": ["userId"]
+    },
+    "Show": {
+      "title": "Show",
+      "description": "A saved show in user's library",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    },
+    "Episode": {
+      "title": "Episode",
+      "description": "A watched episode",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "watched": { "type": "boolean" }
+      }
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User document"
+    },
+    "users/{userId}/shows/{showId}": {
+      "schema": { "$ref": "#/entities/Show" },
+      "description": "A show saved by user"
+    },
+    "users/{userId}/shows/{showId}/episodes/{episodeId}": {
+      "schema": { "$ref": "#/entities/Episode" },
+      "description": "Episode watch state"
+    }
+  }
+}

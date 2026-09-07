@@ -90,6 +90,8 @@ export interface PlaybackCandidate {
   audioCodec?: string;
   score: number;
   seeders?: number;
+  readiness?: string;
+  provider?: string;
 }
 
 export interface PlaybackSession {
@@ -111,5 +113,5 @@ export interface PlaybackRequest {
   season: number;
   number: number;
   episodeName: string;
-  runtimeMinutes?: number;
+  contextEpisodes?: UserEpisode[];
 }

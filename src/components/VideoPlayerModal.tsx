@@ -3,24 +3,87 @@ import { X, PlayCircle, RefreshCcw, List, Check, Database, Copy, ExternalLink, F
 import { openExternalPlayer, getBestTorrentioStream } from "../lib/debrid";
 import { PlaybackRequest, PlaybackCandidate } from "../types";
 import { getTMDBExternalIds } from "../lib/tmdb";
-import { getShow } from "../lib/tvmaze";
+import { getShow, resolveTVMazeShow } from "../lib/tvmaze";
+import { doc, setDoc } from "firebase/firestore";
+import { db, auth } from "../firebase";
+import { removeUndefined } from "../lib/library";
+import { getIntroDBSegments, IntroDBSegment } from "../lib/introdb";
+
+const formatBytes = (bytes?: number) => {
+  if (!bytes) return "";
+  const gb = bytes / 1024 / 1024 / 1024;
+  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  const mb = bytes / 1024 / 1024;
+  return `${mb.toFixed(1)} MB`;
+};
+
+function StreamBadges({ cand, isExternal }: { cand: PlaybackCandidate, isExternal: boolean }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {cand.provider && (
+        <span className="bg-purple-500/15 text-purple-300 font-bold text-[10px] px-2 py-0.5 rounded border border-purple-500/20">
+          ⚙️ {cand.provider}
+        </span>
+      )}
+      {cand.readiness === 'cached' && (
+        <span className="bg-blue-500/15 text-blue-300 font-bold text-[10px] px-2 py-0.5 rounded border border-blue-500/20">
+          ⚡ Cached
+        </span>
+      )}
+      {cand.readiness === 'uncached' && (
+        <span className="bg-red-500/15 text-red-300 font-bold text-[10px] px-2 py-0.5 rounded border border-red-500/20">
+          ⏳ Uncached
+        </span>
+      )}
+      {cand.seeders !== undefined && (
+        <span className="bg-emerald-500/10 text-emerald-400 font-bold text-[10px] px-2 py-0.5 rounded border border-emerald-500/20">
+          👤 {cand.seeders} seeds
+        </span>
+      )}
+      {isExternal ? (
+        <span className="bg-amber-500/10 text-amber-300 font-bold text-[10px] px-2 py-0.5 rounded border border-amber-500/20">
+          External
+        </span>
+      ) : (
+        <span className="bg-green-500/20 text-green-300 font-bold text-[10px] px-2 py-0.5 rounded border border-green-500/20">
+          Playable
+        </span>
+      )}
+      {cand.quality && (
+        <span className="bg-white/10 text-white/80 font-bold text-[10px] px-2 py-0.5 rounded border border-white/5">
+          {cand.quality}
+        </span>
+      )}
+      {cand.sizeBytes && (
+        <span className="bg-slate-800/80 text-slate-300 font-mono text-[10px] px-2 py-0.5 rounded border border-slate-700">
+          {formatBytes(cand.sizeBytes)}
+        </span>
+      )}
+    </div>
+  );
+}
 
 interface VideoPlayerModalProps {
   request: PlaybackRequest;
+  nextRequest?: PlaybackRequest;
+  alternativeRequests?: PlaybackRequest[];
+  onPlayNext?: (req: PlaybackRequest) => void;
   onClose: () => void;
 }
 
 type PlayerMode = 'loading' | 'mp4_play' | 'mkv_transition' | 'error';
 
-export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
+export function VideoPlayerModal({ request, nextRequest, alternativeRequests, onClose, onPlayNext }: VideoPlayerModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const isIOS = /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   
-  const [mp4Candidates, setMp4Candidates] = useState<PlaybackCandidate[]>([]);
-  const [mkvCandidates, setMkvCandidates] = useState<PlaybackCandidate[]>([]);
-  const [mp4Index, setMp4Index] = useState(0);
+  const [candidates, setCandidates] = useState<PlaybackCandidate[]>([]);
+  const [candidateIndex, setCandidateIndex] = useState(0);
   
+  const mp4Candidates = candidates.filter(c => c.container === 'web-compatible');
+  const mkvCandidates = candidates.filter(c => c.container !== 'web-compatible');
+
   const [mode, setMode] = useState<PlayerMode>('loading');
   const [showSourceSelector, setShowSourceSelector] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
@@ -35,58 +98,217 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [sourceValidated, setSourceValidated] = useState(false);
   const [resolutionAttempt, setResolutionAttempt] = useState(0);
+  const [introDBSegments, setIntroDBSegments] = useState<IntroDBSegment[]>([]);
+  const [ignoredSegmentTypes, setIgnoredSegmentTypes] = useState<Set<string>>(new Set());
+  const [playbackClock, setPlaybackClock] = useState({ current: 0, duration: 0, playing: false });
+  const [activeSkipSegment, setActiveSkipSegment] = useState<IntroDBSegment | null>(null);
+  
+  const [creditsAutoplayCountdown, setCreditsAutoplayCountdown] = useState<number | null>(null);
+  const [autoplayCountdown, setAutoplayCountdown] = useState<number | null>(null);
+  const [episodeEnded, setEpisodeEnded] = useState(false);
+  const [shouldWarmNextSource, setShouldWarmNextSource] = useState(false);
+  
+  // Ref to prevent multiple triggers
+  const skipExecutionLock = useRef(false);
+
+  useEffect(() => {
+    skipExecutionLock.current = false;
+    async function loadIntroDB() {
+      if (request.imdbId && !request.isMovie) {
+        const segments = await getIntroDBSegments(request.imdbId, request.season, request.number);
+        setIntroDBSegments(segments);
+      }
+    }
+    loadIntroDB();
+  }, [request]);
+
+  useEffect(() => {
+    // Find active skip segment
+    if (playbackClock.current === 0 || playbackClock.duration === 0) {
+      setActiveSkipSegment(null);
+      return;
+    }
+    const active = introDBSegments.find(s => 
+      playbackClock.current >= s.start_sec && 
+      playbackClock.current < s.end_sec && 
+      !ignoredSegmentTypes.has(s.segment_type)
+    );
+    setActiveSkipSegment(active || null);
+    
+    // Evaluate if we should warm next source
+    const outroStart = introDBSegments.find(s => s.segment_type === "outro")?.start_sec;
+    if (episodeEnded || creditsAutoplayCountdown !== null || (outroStart && playbackClock.current >= Math.max(0, outroStart - 180))) {
+      setShouldWarmNextSource(true);
+    }
+  }, [playbackClock.current, playbackClock.duration, introDBSegments, ignoredSegmentTypes, episodeEnded, creditsAutoplayCountdown]);
+
+  // Credits Autoplay Trigger
+  useEffect(() => {
+    // Trigger Condition: creditsWindowActive
+    const isOutroActive = activeSkipSegment?.segment_type === "outro";
+    // Or mathematically: within last 60 seconds if no outro segment (for simplicity, relying on outro segment)
+    // We'll use just the outro segment for now if it exists, or if within last 30s.
+    const outroSegment = introDBSegments.find(s => s.segment_type === "outro");
+    const passedOutroStart = outroSegment && playbackClock.current >= outroSegment.start_sec;
+    const creditsWindowActive = isOutroActive || passedOutroStart || (playbackClock.duration > 0 && playbackClock.duration - playbackClock.current <= 30 && !outroSegment);
+    
+    if (creditsWindowActive && creditsAutoplayCountdown === null && !episodeEnded && nextRequest) {
+      setCreditsAutoplayCountdown(15);
+    } else if (!creditsWindowActive && creditsAutoplayCountdown !== null) {
+      setCreditsAutoplayCountdown(null);
+    }
+  }, [activeSkipSegment, playbackClock.current, playbackClock.duration, creditsAutoplayCountdown, episodeEnded, nextRequest, introDBSegments]);
+
+  // Credits Tick Loop
+  useEffect(() => {
+    if (creditsAutoplayCountdown !== null && creditsAutoplayCountdown > 0 && playbackClock.playing) {
+      const timer = window.setTimeout(() => setCreditsAutoplayCountdown(c => c !== null ? c - 1 : null), 1000);
+      return () => clearTimeout(timer);
+    }
+    if (creditsAutoplayCountdown === 0) {
+      startNextEpisode();
+    }
+  }, [creditsAutoplayCountdown, playbackClock.playing]);
+
+  // Post-Video End Tick Loop
+  useEffect(() => {
+    if (autoplayCountdown !== null && autoplayCountdown > 0) {
+      const timer = window.setTimeout(() => setAutoplayCountdown(c => c !== null ? c - 1 : null), 1000);
+      return () => clearTimeout(timer);
+    }
+    if (autoplayCountdown === 0) {
+      startNextEpisode();
+    }
+  }, [autoplayCountdown]);
+
+  // Pre-warming Next Episode
+  useEffect(() => {
+    if (shouldWarmNextSource && nextRequest?.imdbId && nextRequest.imdbId !== "none") {
+      // Just fetch it to populate cache, don't await or store result
+      getBestTorrentioStream(nextRequest.imdbId, nextRequest.season, nextRequest.number, nextRequest.isMovie ? "movie" : "series").catch(() => {});
+    }
+  }, [shouldWarmNextSource, nextRequest]);
+
+  const startNextEpisode = () => {
+    if (nextRequest && onPlayNext && !skipExecutionLock.current) {
+      skipExecutionLock.current = true;
+      onPlayNext(nextRequest);
+    }
+  };
+
+  const skipActiveSegment = () => {
+    if (!activeSkipSegment || !videoRef.current) return;
+    if (activeSkipSegment.segment_type === "outro" && nextRequest) {
+      startNextEpisode();
+    } else {
+      videoRef.current.currentTime = Math.min(videoRef.current.duration, activeSkipSegment.end_sec + 0.25);
+    }
+  };
+
+  const handleEpisodeEnded = () => {
+    setEpisodeEnded(true);
+    setCreditsAutoplayCountdown(null);
+    if (nextRequest) {
+      setAutoplayCountdown(10);
+    }
+  };
   
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const playAttemptedForSourceRef = useRef(false);
   const candidateAdvanceLockRef = useRef(false);
   const sourceValidatedRef = useRef(false);
+  const startupDeadlineRef = useRef(0);
 
   // Mutable refs to eliminate stale closure issues in timers & event handlers
+  const candidatesRef = useRef<PlaybackCandidate[]>([]);
   const mp4CandidatesRef = useRef<PlaybackCandidate[]>([]);
   const mkvCandidatesRef = useRef<PlaybackCandidate[]>([]);
-  const mp4IndexRef = useRef<number>(0);
+  const candidateIndexRef = useRef<number>(0);
   const modeRef = useRef<PlayerMode>('loading');
 
-  useEffect(() => { mp4CandidatesRef.current = mp4Candidates; }, [mp4Candidates]);
-  useEffect(() => { mkvCandidatesRef.current = mkvCandidates; }, [mkvCandidates]);
-  useEffect(() => { mp4IndexRef.current = mp4Index; }, [mp4Index]);
+  useEffect(() => {
+    candidatesRef.current = candidates;
+    mp4CandidatesRef.current = mp4Candidates;
+    mkvCandidatesRef.current = mkvCandidates;
+  }, [candidates]);
+  useEffect(() => { candidateIndexRef.current = candidateIndex; }, [candidateIndex]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
-  const currentMp4Stream = mp4Candidates[mp4Index]?.url;
+  const currentMp4Stream = mp4Candidates[candidateIndex]?.url;
+  const topMkv = mkvCandidates[0];
 
-  const getMinimumValidDurationSeconds = useCallback(() => {
-    const runtimeMinutes = typeof request.runtimeMinutes === "number" && request.runtimeMinutes > 0
-      ? request.runtimeMinutes
-      : undefined;
-
-    if (request.isMovie) {
-      // Require at least 55% of the expected movie runtime. When runtime data is
-      // unavailable, require 30 minutes so normal trailers and featurettes can
-      // never reach the visible player.
-      return runtimeMinutes
-        ? Math.max(15 * 60, runtimeMinutes * 0.55 * 60)
-        : 30 * 60;
+useEffect(() => {
+    async function resolvePlayback() {
+      setEpisodeEnded(false);
+      setCreditsAutoplayCountdown(null);
+      setAutoplayCountdown(null);
+      setPlaybackClock({ current: 0, duration: 0, playing: false });
+      setSourceValidated(false);
+      sourceValidatedRef.current = false;
+      if (!request.imdbId || request.imdbId === "none") {
+        setHasError(true);
+        setStatusText("No stream source available.");
+        return;
+      }
+      
+      try {
+        setIsLoading(true);
+        setHasError(false);
+        setStatusText("Locating title...");
+        
+        const results = await getBestTorrentioStream(
+          request.imdbId,
+          request.season,
+          request.number,
+          request.isMovie ? "movie" : "series",
+          undefined,
+          resolutionAttempt > 0
+        );
+        
+        if (results.length === 0) {
+          setHasError(true);
+          setStatusText("No streams found.");
+          return;
+        }
+        
+        setCandidates(results);
+        setCandidateIndex(0);
+        
+        const mp4s = results.filter(c => c.container === 'web-compatible');
+        if (mp4s.length > 0) {
+          setMode('mp4_play');
+        } else {
+          setMode('mkv_transition');
+        }
+      } catch (err: any) {
+        setHasError(true);
+        setStatusText(err.message || "Failed to find streams");
+      }
     }
+    resolvePlayback();
+  }, [request, resolutionAttempt]);
+  const handleExternalPlay = (url: string) => {
+    try {
+      openExternalPlayer(url);
+    } catch (err: any) {
+      setPlaybackError(err.message || "Failed to open external player.");
+      setMode('error');
+    }
+  };
 
-    return runtimeMinutes
-      ? Math.max(4 * 60, runtimeMinutes * 0.45 * 60)
-      : 6 * 60;
-  }, [request.isMovie, request.runtimeMinutes]);
-
-  const copyToClipboard = (url: string, e?: React.MouseEvent) => {
+  const copyToClipboard = async (url: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    navigator.clipboard.writeText(url);
-    setCopiedUrl(url);
-    setTimeout(() => setCopiedUrl(null), 2500);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrl(url);
+      setTimeout(() => setCopiedUrl(null), 2500);
+    } catch (err) {
+      console.error("Copy failed", err);
+      setPlaybackWarning("Failed to copy link. Check clipboard permissions.");
+      setTimeout(() => setPlaybackWarning(null), 3000);
+    }
   };
 
-  const formatBytes = (bytes?: number) => {
-    if (!bytes) return "";
-    const gb = bytes / 1024 / 1024 / 1024;
-    if (gb >= 1) return `${gb.toFixed(2)} GB`;
-    const mb = bytes / 1024 / 1024;
-    return `${mb.toFixed(1)} MB`;
-  };
 
   const handleNextMp4Candidate = useCallback((manual = false) => {
     // Several media events can fire for the same failure. Only advance once.
@@ -106,9 +328,9 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
     setSourceValidated(false);
     setAutoplayBlocked(false);
 
-    const currentCandidates = mp4CandidatesRef.current;
+    const currentMp4s = mp4CandidatesRef.current;
     const currentMkvs = mkvCandidatesRef.current;
-    const currentIndex = mp4IndexRef.current;
+    const currentIndex = candidateIndexRef.current;
 
     const resetAttemptState = () => {
       setHasError(false);
@@ -117,17 +339,32 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
       setIsLoading(true);
     };
 
-    if (currentIndex + 1 < currentCandidates.length) {
+    if (!manual && startupDeadlineRef.current !== 0 && Date.now() > startupDeadlineRef.current) {
+      if (currentMkvs.length > 0) {
+        setMode('mkv_transition');
+        modeRef.current = 'mkv_transition';
+        setPlaybackError("Automatic playback timed out. VLC-ready options are available.");
+        setIsLoading(false);
+      } else {
+        setMode('error');
+        modeRef.current = 'error';
+        setPlaybackError("Automatic playback timed out and no more sources are available.");
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    if (currentIndex + 1 < currentMp4s.length) {
       const nextIdx = currentIndex + 1;
-      setMp4Index(nextIdx);
-      mp4IndexRef.current = nextIdx;
+      setCandidateIndex(nextIdx);
+      candidateIndexRef.current = nextIdx;
       resetAttemptState();
       setAutoplayBlocked(false);
-      setStatusText(`Checking MP4 source ${nextIdx + 1} of ${currentCandidates.length}...`);
-    } else if (manual && currentCandidates.length > 0) {
-      const nextIdx = currentCandidates.length > 1 ? 0 : currentIndex;
-      setMp4Index(nextIdx);
-      mp4IndexRef.current = nextIdx;
+      setStatusText(`Checking MP4 source ${nextIdx + 1} of ${currentMp4s.length}...`);
+    } else if (manual && currentMp4s.length > 0) {
+      const nextIdx = currentMp4s.length > 1 ? 0 : currentIndex;
+      setCandidateIndex(nextIdx);
+      candidateIndexRef.current = nextIdx;
       resetAttemptState();
       setAutoplayBlocked(false);
       setStatusText("Checking video source...");
@@ -157,261 +394,127 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
   }, [isIOS]);
 
   /**
-   * Keep every browser source hidden until its duration proves it is full-length
-   * content. This blocks Real-Debrid placeholders as well as trailers, teasers,
-   * samples, previews, and other short bonus videos that slipped past metadata
-   * filtering.
+   * Real-Debrid can occasionally return a short placeholder video stating that
+   * the requested file was removed. Keep every source hidden until its duration
+   * proves it is a real movie or episode, then reveal it to the user.
    */
-  const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | 'invalid' | 'pending' => {
+const attemptPlayback = async () => {
+    if (!videoRef.current) return;
+    try {
+      await videoRef.current.play();
+      setAutoplayBlocked(false);
+      setIsLoading(false);
+    } catch (e: any) {
+      if (e.name === 'NotAllowedError') {
+        setAutoplayBlocked(true);
+        setStatusText("Video is ready. Tap play to begin.");
+      } else {
+        console.error("Playback failed", e);
+      }
+    }
+  };
+const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | 'invalid' | 'pending' => {
     const duration = video.duration;
-
     if (!Number.isFinite(duration) || duration <= 0) {
       return 'pending';
     }
 
-    const minimumDuration = getMinimumValidDurationSeconds();
-    if (duration < minimumDuration) {
+    // A normal movie or TV episode will never be a 30-second clip.
+    // Allow a little margin because placeholder duration can vary by browser.
+    if (duration <= 45) {
       sourceValidatedRef.current = false;
       setSourceValidated(false);
       setAutoplayBlocked(false);
       setIsLoading(true);
-      setStatusText(
-        request.isMovie
-          ? "Skipping a short preview or trailer..."
-          : "Skipping a short preview or unavailable source..."
-      );
-
+      setStatusText("Skipping an unavailable source...");
       // Defer the source change until the current media event finishes.
       window.setTimeout(() => handleNextMp4Candidate(), 0);
       return 'invalid';
     }
 
-    sourceValidatedRef.current = true;
-    setSourceValidated(true);
-    setHasError(false);
+    // English Audio Detection & Enforcement
+    const audioTracks = (video as any).audioTracks;
+    if (audioTracks && audioTracks.length > 0) {
+      let englishTrackFound = false;
+      let onlyForeignTracks = true;
+      let englishTrackIndex = -1;
 
-    if (isIOS) {
-      setAutoplayBlocked(true);
-      setIsLoading(false);
-      setStatusText("Video is ready. Tap play to begin.");
-    }
-
-    return 'valid';
-  }, [getMinimumValidDurationSeconds, handleNextMp4Candidate, isIOS, request.isMovie]);
-
-  useEffect(() => {
-    let active = true;
-
-    setMode('loading');
-    modeRef.current = 'loading';
-    setMp4Candidates([]);
-    mp4CandidatesRef.current = [];
-    setMkvCandidates([]);
-    mkvCandidatesRef.current = [];
-    setMp4Index(0);
-    mp4IndexRef.current = 0;
-    setPlaybackError(null);
-    setPlaybackWarning(null);
-    setHasError(false);
-    setAutoplayBlocked(false);
-    setSourceValidated(false);
-    sourceValidatedRef.current = false;
-    setIsLoading(true);
-    candidateAdvanceLockRef.current = false;
-    playAttemptedForSourceRef.current = false;
-    
-    async function resolveAndFetch() {
-      try {
-        let activeImdbId = request.imdbId;
+      for (let i = 0; i < audioTracks.length; i++) {
+        const track = audioTracks[i];
+        const lang = (track.language || '').toLowerCase();
+        const label = (track.label || '').toLowerCase();
         
-        if (!activeImdbId) {
-          setStatusText("Locating title...");
-          if (request.isMovie) {
-            const tmdbId = request._tmdbId || (request.tvmazeId && request.tvmazeId < 0 ? (-request.tvmazeId - 1000000000) : undefined);
-            if (tmdbId) {
-              const extIds = await getTMDBExternalIds(tmdbId, true);
-              activeImdbId = extIds.imdb || undefined;
-            }
-          } else {
-            if (request.tvmazeId && request.tvmazeId > 0) {
-              const freshShow = await getShow(request.tvmazeId);
-              activeImdbId = freshShow.externals?.imdb || undefined;
-            }
-          }
+        const isEnglish = lang.includes('en') || label.includes('eng') || label.includes('english');
+        // Match common torrent foreign tags
+        const isForeign = /^(fr|it|es|de|ru|hi|ta|te|ja|ko|zh|pt|pl)$/.test(lang) || /fre|french|ita|spa|ger|rus|hin|tam|tel|jap|kor|chi|por|lat|pol|vostfr/.test(label);
+        
+        if (isEnglish) {
+          englishTrackFound = true;
+          englishTrackIndex = i;
+          onlyForeignTracks = false;
+        } else if (!isForeign && !lang && !label) {
+          onlyForeignTracks = false; // Could be anything
         }
-        
-        if (!active || !activeImdbId || activeImdbId === "none") {
-          throw new Error("Unable to locate a valid IMDb ID for this title. Streams cannot be loaded.");
-        }
-        
-        setStatusText("Finding sources...");
-        const found = await getBestTorrentioStream(
-          activeImdbId,
-          request.season,
-          request.number,
-          request.isMovie ? 'movie' : 'series',
-          {
-            expectedTitle: request.showName,
-            expectedRuntimeMinutes: request.runtimeMinutes
-          }
-        );
-        
-        if (!active) return;
-        
-        if (found.length === 0) {
-          throw new Error("No playable sources found.");
-        }
+      }
 
-        const mp4s = found.filter(c => c.container === "web-compatible");
-        const mkvs = found
-          .filter(c => c.container !== "web-compatible")
-          .sort((a, b) => (b.seeders || 0) - (a.seeders || 0));
-
-        setMp4Candidates(mp4s);
-        mp4CandidatesRef.current = mp4s;
-
-        setMkvCandidates(mkvs);
-        mkvCandidatesRef.current = mkvs;
-        
-        if (mp4s.length > 0) {
-          setMp4Index(0);
-          mp4IndexRef.current = 0;
-          setMode('mp4_play');
-          modeRef.current = 'mp4_play';
-          setAutoplayBlocked(false);
-          setSourceValidated(false);
-          sourceValidatedRef.current = false;
-          setIsLoading(true);
-          setStatusText(`Checking MP4 source 1 of ${mp4s.length}...`);
-        } else if (mkvs.length > 0) {
-          setMode('mkv_transition');
-          modeRef.current = 'mkv_transition';
-          setIsLoading(false);
-        } else {
-          setMode('error');
-          modeRef.current = 'error';
-          setPlaybackError("No playable sources found.");
-          setIsLoading(false);
+      if (englishTrackFound) {
+        // Force the English track
+        for (let i = 0; i < audioTracks.length; i++) {
+          audioTracks[i].enabled = (i === englishTrackIndex);
         }
-      } catch (err: any) {
-        if (!active) return;
-        setHasError(true);
-        setPlaybackError(err.message);
-        setMode('error');
-        modeRef.current = 'error';
-        setIsLoading(false);
+      } else if (onlyForeignTracks && audioTracks.length > 0) {
+        // Failsafe: reject known foreign-only sources
+        sourceValidatedRef.current = false;
+        setSourceValidated(false);
+        setAutoplayBlocked(false);
+        setIsLoading(true);
+        setStatusText("Skipping a source without English audio...");
+        window.setTimeout(() => handleNextMp4Candidate(), 0);
+        return 'invalid';
       }
     }
-    
-    resolveAndFetch();
-    
-    return () => { active = false; };
-  }, [request, resolutionAttempt, isIOS]);
 
-  const attemptPlayback = async () => {
+    if (!sourceValidatedRef.current) {
+      sourceValidatedRef.current = true;
+      setSourceValidated(true);
+    }
+    return 'valid';
+  }, [handleNextMp4Candidate]);
+
+  useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    const validation = validateCurrentSource(video);
-    if (validation !== 'valid') {
-      if (validation === 'pending') {
-        setAutoplayBlocked(false);
-        setIsLoading(true);
-        setStatusText("Checking video source...");
-      }
+    if (mode !== 'mp4_play' || !currentMp4Stream) {
       return;
     }
 
-    try {
-      setIsLoading(true);
-      await video.play();
-      setAutoplayBlocked(false);
-      setHasError(false);
-      setIsLoading(false);
-      setStatusText("Playing");
-    } catch (error) {
-      const pbError = error instanceof DOMException ? error : null;
-      if (pbError?.name === "NotAllowedError") {
-        setAutoplayBlocked(true);
-        setIsLoading(false);
-        return;
-      }
-      if (pbError?.name === "AbortError") {
-        return;
-      }
-      setAutoplayBlocked(false);
-      setIsLoading(false);
-      handleNextMp4Candidate();
-    }
-  };
-
-  // Give each direct stream time to expose metadata while it remains hidden.
-  useEffect(() => {
-    if (mode !== 'mp4_play' || !currentMp4Stream) return;
-
-    candidateAdvanceLockRef.current = false;
-    playAttemptedForSourceRef.current = false;
-    sourceValidatedRef.current = false;
-    setSourceValidated(false);
-    setAutoplayBlocked(false);
-    setIsLoading(true);
-    setStatusText(`Checking MP4 source ${mp4IndexRef.current + 1} of ${mp4CandidatesRef.current.length}...`);
-
-    const timeout = window.setTimeout(() => {
-      if (modeRef.current !== 'mp4_play' || sourceValidatedRef.current) return;
-
-      const video = videoRef.current;
-      if (video) {
-        const validation = validateCurrentSource(video);
-        if (validation !== 'pending') return;
-      }
-
-      handleNextMp4Candidate();
-    }, 15000); // 15s timeout to start playing
-
-    return () => window.clearTimeout(timeout);
-  }, [currentMp4Stream, mode, handleNextMp4Candidate, validateCurrentSource]);
-
-  useEffect(() => {
-    if (mode !== 'mp4_play') return;
-    const video = videoRef.current;
-    if (!video) return;
-
-    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    let stallTimer: number | null = null;
 
     const handleWaiting = () => {
-      if (video.paused || autoplayBlocked) return;
-
-      // Only show spinner if video actually lacks sufficient buffer data
-      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-        setIsLoading(true);
-      }
-
-      if (stallTimer) clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => {
-        if (
-          modeRef.current === 'mp4_play' &&
-          !video.paused &&
-          video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
-        ) {
+      if (!autoplayBlocked) setIsLoading(true);
+      stallTimer = window.setTimeout(() => {
+        if (videoRef.current && videoRef.current.readyState < 3 && modeRef.current === 'mp4_play') {
           handleNextMp4Candidate();
         }
-      }, 15000); // 15s stall timeout to allow for buffering
+      }, 15000);
     };
 
     const handlePlaying = () => {
-      if (!sourceValidatedRef.current) {
-        const validation = validateCurrentSource(video);
-        if (validation !== 'valid') {
-          video.pause();
-          return;
+      if (!video.paused && video.currentTime > 0) {
+        if (!sourceValidatedRef.current) {
+          const validation = validateCurrentSource(video);
+          if (validation !== 'valid') {
+            video.pause();
+            return;
+          }
         }
+        setIsLoading(false);
+        setAutoplayBlocked(false);
+        setStatusText("Playing");
+        startupDeadlineRef.current = 0;
+        if (stallTimer) clearTimeout(stallTimer);
       }
-
-      setIsLoading(false);
-      setAutoplayBlocked(false);
-      setStatusText("Playing");
-      if (stallTimer) clearTimeout(stallTimer);
     };
 
     const handleTimeUpdate = () => {
@@ -426,6 +529,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
         setIsLoading(false);
         setAutoplayBlocked(false);
         setStatusText("Playing");
+        startupDeadlineRef.current = 0;
         if (stallTimer) clearTimeout(stallTimer);
       }
     };
@@ -441,6 +545,8 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
     const handleCanPlay = () => {
       const validation = validateCurrentSource(video);
       if (validation !== 'valid') return;
+      
+      startupDeadlineRef.current = 0;
 
       if (isIOS) {
         setAutoplayBlocked(true);
@@ -516,7 +622,6 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
 
   const vlcLabel = isIOS ? "Open in VLC" : "Open video in new tab";
   const showCloseButton = showUI || mode === 'mkv_transition' || mode === 'error' || isLoading || autoplayBlocked;
-  const topMkv = mkvCandidates[0];
 
   return (
     <div className="fixed inset-0 z-[100] bg-slate-950">
@@ -554,22 +659,20 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
               )}
               {currentMp4Stream && (
                 <div className="flex items-center gap-3 mt-2 pointer-events-auto flex-wrap">
-                  {sourceValidated && (
-                    <button
-                      onClick={() => openExternalPlayer(currentMp4Stream)}
-                      className="w-max px-4 py-2 bg-orange-500/80 hover:bg-orange-500 text-slate-900 dark:text-white rounded-full text-sm font-semibold transition-colors flex items-center gap-2 shadow-md"
-                    >
-                      <PlayCircle className="w-4 h-4" />
-                      {vlcLabel}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handleExternalPlay(currentMp4Stream)}
+                    className="w-max px-4 py-2 bg-orange-500/80 hover:bg-orange-500 text-slate-900 dark:text-white rounded-full text-sm font-semibold transition-colors flex items-center gap-2 shadow-md"
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    {vlcLabel}
+                  </button>
                   {mp4Candidates.length > 1 && (
                     <button
                       onClick={() => handleNextMp4Candidate(true)}
                       className="w-max px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-full text-sm font-semibold transition-colors flex items-center gap-2 backdrop-blur-md border border-white/5"
                     >
                       <RefreshCcw className="w-4 h-4" />
-                      Next MP4 ({mp4Index + 1}/{mp4Candidates.length})
+                      Next MP4 ({candidateIndex + 1}/{mp4Candidates.length})
                     </button>
                   )}
                   {mkvCandidates.length > 0 && (
@@ -586,7 +689,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
                     className="w-max px-4 py-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-full text-sm font-semibold transition-colors flex items-center gap-2 backdrop-blur-md border border-white/10"
                   >
                     <List className="w-4 h-4" />
-                    All Sources
+                    All Sources ({candidates.length})
                   </button>
                 </div>
               )}
@@ -632,12 +735,13 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
             </div>
           )}
 
-          {currentMp4Stream && (
+          {currentMp4Stream && (<>
             <video
               ref={videoRef}
               src={currentMp4Stream}
               controls
               playsInline
+              autoPlay
               preload={isIOS ? "metadata" : "auto"}
               onPause={() => setShowUI(true)}
               onPlay={() => {
@@ -648,10 +752,18 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
                 setIsLoading(false);
                 setAutoplayBlocked(false);
               }}
+              onEnded={() => handleEpisodeEnded()}
               onTimeUpdate={() => {
-                if (videoRef.current && !videoRef.current.paused && videoRef.current.currentTime > 0) {
-                  setIsLoading(false);
-                  setAutoplayBlocked(false);
+                if (videoRef.current) {
+                  setPlaybackClock({
+                    current: videoRef.current.currentTime,
+                    duration: videoRef.current.duration,
+                    playing: !videoRef.current.paused
+                  });
+                  if (!videoRef.current.paused && videoRef.current.currentTime > 0) {
+                    setIsLoading(false);
+                    setAutoplayBlocked(false);
+                  }
                 }
               }}
               aria-hidden={!sourceValidated}
@@ -661,7 +773,47 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
             >
               Your browser does not support the video tag.
             </video>
+          {/* Segment Skip Buttons */}
+          {activeSkipSegment && (
+            <div className="absolute bottom-24 right-4 sm:right-8 sm:bottom-28 z-[90] flex flex-col gap-2 pointer-events-auto">
+              <button
+                onClick={skipActiveSegment}
+                className="bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white font-bold py-2.5 px-5 rounded-full shadow-lg transition-all flex items-center gap-2 text-sm sm:text-base group"
+              >
+                Skip {activeSkipSegment.segment_type === "outro" ? "Credits" : activeSkipSegment.segment_type === "recap" ? "Recap" : "Intro"}
+                <svg className="w-4 h-4 opacity-70 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
           )}
+
+          {/* Autoplay & Credits Countdown Overlay */}
+          {(creditsAutoplayCountdown !== null || autoplayCountdown !== null) && nextRequest && (
+            <div className="absolute bottom-6 right-4 sm:right-8 sm:bottom-8 z-[95] pointer-events-auto">
+              <div className="bg-slate-950/80 backdrop-blur-xl border border-slate-700/50 p-4 sm:p-5 rounded-2xl shadow-2xl flex items-center gap-4 sm:gap-5 max-w-sm w-full transition-all hover:bg-slate-900/90 hover:border-slate-600/50">
+                <div className="relative w-12 h-12 flex items-center justify-center shrink-0">
+                  <svg className="w-full h-full -rotate-90 text-slate-800" viewBox="0 0 36 36">
+                    <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3"></circle>
+                    <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3" strokeDasharray="100" strokeDashoffset={100 - ((creditsAutoplayCountdown !== null ? creditsAutoplayCountdown : autoplayCountdown!) / (creditsAutoplayCountdown !== null ? 15 : 10)) * 100} className="text-orange-500 transition-all duration-1000 ease-linear"></circle>
+                  </svg>
+                  <span className="absolute text-sm font-bold text-white">{creditsAutoplayCountdown !== null ? creditsAutoplayCountdown : autoplayCountdown}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-orange-400 font-bold tracking-wider uppercase mb-0.5">Playing Next</p>
+                  <h4 className="text-white font-bold text-sm sm:text-base truncate">{nextRequest.showName}</h4>
+                  <p className="text-slate-400 text-xs truncate">S{nextRequest.season} E{nextRequest.number} • {nextRequest.episodeName}</p>
+                </div>
+                <button 
+                  onClick={startNextEpisode}
+                  className="bg-orange-500 hover:bg-orange-400 text-slate-950 p-3 rounded-xl transition-colors shrink-0"
+                >
+                  <PlayCircle className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+          )}
+          </>)}
         </>
       )}
 
@@ -681,7 +833,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
               <p className="text-white/60 text-xs sm:text-sm max-w-lg mx-auto pt-1 leading-relaxed">
                 {mp4Candidates.length > 0 
                   ? "In-app browser playback for MP4 streams failed. External torrent sources offer higher quality and require an external player like VLC."
-                  : "All available stream sources for this title are in an external format. These files are played via VLC or an external media player."
+                  : "All available stream sources for this title are in an external format (MKV). These files are played via VLC or an external media player."
                 }
               </p>
             </div>
@@ -710,7 +862,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
 
                 <div className="flex flex-col sm:flex-row gap-3 pt-1">
                   <button
-                    onClick={() => openExternalPlayer(topMkv.url)}
+                    onClick={() => handleExternalPlay(topMkv.url)}
                     className="flex-1 py-3.5 px-6 bg-orange-500 hover:bg-orange-600 active:scale-[0.99] text-slate-950 font-extrabold rounded-xl transition-all shadow-xl flex items-center justify-center gap-2 text-sm sm:text-base"
                   >
                     <PlayCircle className="w-5 h-5" />
@@ -731,8 +883,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
             {mkvCandidates.length > 0 && (
               <div className="space-y-3 pt-2">
                 <div className="flex items-center justify-between text-xs text-white/70 font-semibold px-1">
-                  <span>Available External Sources ({mkvCandidates.length}) — Sorted by Seeds</span>
-                  <span className="text-emerald-400">Highest Seeds First</span>
+                  <span>Available External Sources ({mkvCandidates.length})</span>
                 </div>
 
                 <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
@@ -742,32 +893,15 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
                       className="bg-slate-900/90 border border-white/10 hover:border-white/20 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all"
                     >
                       <div className="space-y-1.5 flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="bg-emerald-500/10 text-emerald-400 font-bold text-[11px] px-2 py-0.5 rounded-full border border-emerald-500/20">
-                            👤 {cand.seeders || 0} seeds
-                          </span>
-                          <span className="bg-amber-500/10 text-amber-300 font-bold text-[11px] px-2 py-0.5 rounded-full border border-amber-500/20">
-                            External
-                          </span>
-                          {cand.quality && (
-                            <span className="bg-white/10 text-white/80 font-bold text-[11px] px-2 py-0.5 rounded-full">
-                              {cand.quality}
-                            </span>
-                          )}
-                          {cand.sizeBytes && (
-                            <span className="text-white/60 text-[11px] font-mono">
-                              {formatBytes(cand.sizeBytes)}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-white/90 text-xs font-mono truncate">
+                        <StreamBadges cand={cand} isExternal={true} />
+                        <p className="text-white/90 text-xs font-mono truncate" title={cand.title}>
                           {cand.title}
                         </p>
                       </div>
 
                       <div className="flex items-center gap-2 self-end sm:self-center">
                         <button
-                          onClick={() => openExternalPlayer(cand.url)}
+                          onClick={() => handleExternalPlay(cand.url)}
                           className="px-3.5 py-2 bg-orange-500/80 hover:bg-orange-500 text-slate-950 font-bold rounded-lg text-xs transition-all flex items-center gap-1.5 shadow"
                         >
                           <PlayCircle className="w-3.5 h-3.5" />
@@ -793,7 +927,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
             {mp4Candidates.length > 0 && (
               <button
                 onClick={() => {
-                  setMp4Index(0);
+                  setCandidateIndex(0);
                   setMode('mp4_play');
                   setIsLoading(true);
                   setStatusText("Retrying MP4 player...");
@@ -809,7 +943,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
               className="px-5 py-2.5 bg-white/5 hover:bg-white/10 text-white/80 text-xs font-semibold rounded-xl transition-all border border-white/5 flex items-center gap-2"
             >
               <List className="w-4 h-4" />
-              View All Sources List
+              View All Sources List ({candidates.length})
             </button>
             <button
               onClick={onClose}
@@ -871,7 +1005,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
                   All Available Stream Sources
                 </h3>
                 <p className="text-white/60 text-xs mt-1">
-                  {mp4Candidates.length} MP4 (In-App) • {mkvCandidates.length} External (VLC)
+                  {mp4Candidates.length} Browser (MP4) • {mkvCandidates.length} External (VLC)
                 </p>
               </div>
               <button 
@@ -883,7 +1017,7 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-              {/* MP4 Section */}
+              {/* In-App Browser Playable Streams Section */}
               {mp4Candidates.length > 0 && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-xs font-bold text-green-400">
@@ -896,59 +1030,76 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
 
                   <div className="space-y-2">
                     {mp4Candidates.map((cand, idx) => {
-                      const isActive = mode === 'mp4_play' && idx === mp4Index;
+                      const isActive = mode === 'mp4_play' && idx === candidateIndex;
                       return (
                         <div
                           key={cand.id || `mp4-${idx}`}
-                          onClick={() => {
-                            candidateAdvanceLockRef.current = false;
-                            playAttemptedForSourceRef.current = false;
-                            sourceValidatedRef.current = false;
-                            setSourceValidated(false);
-                            setAutoplayBlocked(false);
-                            setMp4Index(idx);
-                            mp4IndexRef.current = idx;
-                            setMode('mp4_play');
-                            modeRef.current = 'mp4_play';
-                            setIsLoading(true);
-                            setStatusText("Checking chosen MP4...");
-                            setShowSourceSelector(false);
-                          }}
-                          className={`w-full text-left p-3.5 rounded-xl cursor-pointer transition-all border flex flex-col gap-2 ${
+                          className={`w-full text-left p-3.5 rounded-xl transition-all border flex flex-col gap-2 ${
                             isActive 
                               ? 'bg-orange-500/15 border-orange-500/60' 
                               : 'bg-white/5 border-white/5 hover:bg-white/10'
                           }`}
                         >
                           <div className="flex items-center justify-between gap-2 w-full">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="bg-green-500/20 text-green-300 text-[10px] font-bold px-2 py-0.5 rounded">
-                                MP4
-                              </span>
-                              {cand.quality && (
-                                <span className="bg-white/10 text-white/80 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                                  {cand.quality}
-                                </span>
-                              )}
-                              {cand.sizeBytes && (
-                                <span className="text-[10px] text-white/60 font-mono">
-                                  {formatBytes(cand.sizeBytes)}
-                                </span>
-                              )}
-                              {cand.seeders !== undefined && cand.seeders > 0 && (
-                                <span className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                                  👤 {cand.seeders} seeds
-                                </span>
-                              )}
+                            <div className="flex items-center gap-2 flex-wrap cursor-pointer flex-1" onClick={() => {
+                              candidateAdvanceLockRef.current = false;
+                              playAttemptedForSourceRef.current = false;
+                              sourceValidatedRef.current = false;
+                              setSourceValidated(false);
+                              setAutoplayBlocked(false);
+                              setCandidateIndex(idx);
+                              candidateIndexRef.current = idx;
+                              setMode('mp4_play');
+                              modeRef.current = 'mp4_play';
+                              setIsLoading(true);
+                              setStatusText("Checking chosen MP4...");
+                              setShowSourceSelector(false);
+                            }}>
+                              <StreamBadges cand={cand} isExternal={false} />
                             </div>
-                            {isActive && (
-                              <div className="flex items-center gap-1 text-orange-400 text-xs font-semibold">
-                                <Check className="w-4 h-4" />
-                                <span>Playing</span>
-                              </div>
-                            )}
+                            
+                            <div className="flex items-center gap-1 pl-2">
+                              {isActive ? (
+                                <div className="flex items-center gap-1 text-orange-400 text-xs font-semibold mr-2">
+                                  <Check className="w-4 h-4" />
+                                  <span>Playing</span>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleExternalPlay(cand.url);
+                                  }}
+                                  className="px-2.5 py-1 bg-orange-500/80 hover:bg-orange-500 text-slate-950 font-bold rounded text-[11px] transition-colors flex items-center gap-1"
+                                >
+                                  <PlayCircle className="w-3 h-3" />
+                                  VLC
+                                </button>
+                              )}
+                              <button
+                                onClick={(e) => copyToClipboard(cand.url, e)}
+                                className="p-1.5 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded transition-colors"
+                                title="Copy Link"
+                              >
+                                <Copy className="w-3 h-3" />
+                              </button>
+                            </div>
                           </div>
-                          <p className="text-white/90 text-xs font-mono leading-relaxed break-all line-clamp-2">
+                          
+                          <p className="text-white/90 text-xs font-mono leading-relaxed break-all line-clamp-2 cursor-pointer" onClick={() => {
+                            candidateAdvanceLockRef.current = false;
+                            playAttemptedForSourceRef.current = false;
+                            sourceValidatedRef.current = false;
+                            setSourceValidated(false);
+                            setAutoplayBlocked(false);
+                            setCandidateIndex(idx);
+                            candidateIndexRef.current = idx;
+                            setMode('mp4_play');
+                            modeRef.current = 'mp4_play';
+                            setIsLoading(true);
+                            setStatusText("Checking chosen MP4...");
+                            setShowSourceSelector(false);
+                          }}>
                             {cand.title}
                           </p>
                         </div>
@@ -958,46 +1109,31 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
                 </div>
               )}
 
-              {/* MKV Section */}
+              {/* External / VLC Streams Section */}
               {mkvCandidates.length > 0 && (
-                <div className="space-y-3 pt-2">
+                <div className="space-y-3">
                   <div className="flex items-center justify-between text-xs font-bold text-amber-400">
                     <span className="flex items-center gap-1.5">
                       <Tv className="w-4 h-4" />
-                      VLC External Streams ({mkvCandidates.length})
+                      External VLC Streams ({mkvCandidates.length})
                     </span>
-                    <span className="text-[10px] bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">Sorted by Seeds</span>
+                    <span className="text-[10px] bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">Ranked</span>
                   </div>
 
                   <div className="space-y-2">
                     {mkvCandidates.map((cand, idx) => (
                       <div
                         key={cand.id || `mkv-${idx}`}
-                        className="w-full text-left p-3.5 rounded-xl bg-white/5 border border-white/5 hover:border-white/15 transition-all flex flex-col gap-2"
+                        className="w-full text-left p-3.5 rounded-xl bg-white/5 border border-white/5 hover:border-white/10 transition-all flex flex-col gap-2"
                       >
                         <div className="flex items-center justify-between gap-2 w-full">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="bg-amber-500/20 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded">
-                              External
-                            </span>
-                            <span className="bg-emerald-500/10 text-emerald-400 font-bold text-[10px] px-2 py-0.5 rounded-full border border-emerald-500/20">
-                              👤 {cand.seeders || 0} seeds
-                            </span>
-                            {cand.quality && (
-                              <span className="bg-white/10 text-white/80 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                                {cand.quality}
-                              </span>
-                            )}
-                            {cand.sizeBytes && (
-                              <span className="text-[10px] text-white/60 font-mono">
-                                {formatBytes(cand.sizeBytes)}
-                              </span>
-                            )}
+                            <StreamBadges cand={cand} isExternal={true} />
                           </div>
-
-                          <div className="flex items-center gap-1">
+                          
+                          <div className="flex items-center gap-1 pl-2">
                             <button
-                              onClick={() => openExternalPlayer(cand.url)}
+                              onClick={() => handleExternalPlay(cand.url)}
                               className="px-2.5 py-1 bg-orange-500/80 hover:bg-orange-500 text-slate-950 font-bold rounded text-[11px] transition-colors flex items-center gap-1"
                             >
                               <PlayCircle className="w-3 h-3" />
@@ -1012,8 +1148,8 @@ export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
                             </button>
                           </div>
                         </div>
-
-                        <p className="text-white/80 text-xs font-mono leading-relaxed break-all line-clamp-2">
+                        
+                        <p className="text-white/90 text-xs font-mono leading-relaxed break-all line-clamp-2">
                           {cand.title}
                         </p>
                       </div>

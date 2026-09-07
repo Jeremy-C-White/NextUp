@@ -5,6 +5,7 @@ import { ExpandableText } from "./ExpandableText";
 import { AddToCalendarButton } from "./AddToCalendarButton";
 import { getTMDBIdFromIMDB, getWatchProviders, getTMDBExternalIds } from "../lib/tmdb";
 import { resolveTVMazeShow, getEpisodes } from "../lib/tvmaze";
+import { getEpisodeReleaseTime, isEpisodeReleased, getReleasedEpisodes } from "../lib/episodes";
 import { getBestTorrentioStream } from "../lib/debrid";
 import { doc, setDoc } from "firebase/firestore";
 import { db, auth } from "../firebase";
@@ -21,7 +22,7 @@ interface Props {
   inLibrary?: boolean;
   onAdd?: (caughtUp: boolean) => void;
   addingShowId?: number | null;
-  onPlayEpisode?: (showId: string, imdbId: string | undefined, episode: UserEpisode) => void;
+  onPlayEpisode?: (showId: string, imdbId: string | undefined, episode: UserEpisode, contextEpisodes?: UserEpisode[]) => void;
 }
 
 export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onToggleWatched, onMarkThrough, inLibrary, onAdd, addingShowId, onPlayEpisode }: Props) {
@@ -46,9 +47,9 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
       document.body.style.overflow = 'hidden';
       
       if (inLibrary !== false && episodes.length > 0) {
-        const unwatched = episodes.filter(e => !e.watched && (e.airstamp ? new Date(e.airstamp) <= new Date() : true));
+        const unwatched = getReleasedEpisodes(episodes).filter(e => !e.watched);
         if (unwatched.length > 0) {
-          setSeasonFilter(unwatched[0].season.toString());
+          setSeasonFilter(String(unwatched[0].season));
         } else {
           setSeasonFilter("all");
         }
@@ -113,24 +114,24 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
       });
     } else if (!show.isMovie && isImdbNoneOrEmpty) {
       setIsCheckingImdb(true);
-      if (targetId && targetId > 0) {
-        resolveTVMazeShow({ id: targetId, name: show.name, isMovie: show.isMovie } as any).then(async (resolved) => {
-          const imdbId = resolved.externals?.imdb;
+      resolveTVMazeShow({ id: targetId || -1, name: show.name, _tmdbId: show._tmdbId, isMovie: false } as any).then(async (resolved) => {
+        const imdbId = resolved.externals?.imdb;
+        if (imdbId) {
           setResolvedLocalImdb(imdbId);
-          if (inLibrary !== false) {
-            const showRef = doc(db, `users/${auth.currentUser?.uid}/shows/${show.id}`);
-            await setDoc(showRef, removeUndefined({ imdbId }), { merge: true });
-          }
-        }).catch(() => {
-          // Ignore
-        }).finally(() => {
-          setIsCheckingImdb(false);
-          setCheckedImdb(true);
-        });
-      } else {
+        }
+        if (inLibrary !== false && auth.currentUser) {
+          const showRef = doc(db, `users/${auth.currentUser.uid}/shows/${show.id}`);
+          await setDoc(showRef, removeUndefined({
+            imdbId: imdbId || undefined,
+            ...(resolved.id > 0 ? { tvmazeId: resolved.id } : {})
+          }), { merge: true });
+        }
+      }).catch(() => {
+        // Ignore
+      }).finally(() => {
         setIsCheckingImdb(false);
         setCheckedImdb(true);
-      }
+      });
     } else {
       setIsCheckingImdb(false);
       setCheckedImdb(true);
@@ -176,7 +177,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
   const seasons = Array.from(new Set(displayEpisodes.map(e => Number(e.season)))).sort((a: any, b: any) => b - a);
   const filteredEpisodes = displayEpisodes.filter(e => {
     if (seasonFilter === "all") return true;
-    return e.season.toString() === seasonFilter;
+    return String(e.season) === seasonFilter;
   });
 
 
@@ -201,7 +202,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
 
   const handlePlayEpisode = async (episode: UserEpisode) => {
     if (onPlayEpisode) {
-      onPlayEpisode(show.id, show.imdbId, episode);
+      onPlayEpisode(show.id, resolvedLocalImdb || show.imdbId, episode, displayEpisodes);
     }
   };
 
@@ -222,7 +223,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
             {show.imageUrl ? (
               <img decoding="async" referrerPolicy="no-referrer" loading="lazy" src={show.imageUrl} alt="" className="w-20 h-30 sm:w-24 sm:h-36 rounded-xl shadow-lg object-cover border border-slate-800 shrink-0" />
             ) : (
-              <div className="w-20 h-30 sm:w-24 sm:h-36 bg-slate-800 rounded-xl flex items-center justify-center text-4xl font-bold text-white shrink-0">{show.name[0]}</div>
+              <div className="w-20 h-30 sm:w-24 sm:h-36 bg-slate-800 rounded-xl flex items-center justify-center text-4xl font-bold text-white shrink-0">{(show.name || "?")[0]}</div>
             )}
             <div className="flex-1 min-w-0 pb-1">
               <span className="text-orange-400 font-bold text-xs uppercase tracking-wider">{show.status}</span>
@@ -337,9 +338,9 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
               </h3>
               {!(show.isMovie) && (
                 <div className="flex items-center gap-3">
-                  {inLibrary !== false && seasonFilter !== "all" && filteredEpisodes.some(e => !e.watched && e.airstamp && new Date(e.airstamp) <= new Date()) && (
+                  {inLibrary !== false && seasonFilter !== "all" && getReleasedEpisodes(filteredEpisodes).some(e => !e.watched) && (
                     <button onClick={() => onMarkThrough(
-                      filteredEpisodes.filter(e => !e.watched && e.airstamp && new Date(e.airstamp) <= new Date()).map(e => e.id)
+                      getReleasedEpisodes(filteredEpisodes).filter(e => !e.watched).map(e => e.id)
                     )} className="text-xs font-bold text-orange-400 bg-orange-500/10 border border-orange-500/20 px-3 py-2 rounded-lg active:scale-95 touch-manipulation">
                       Mark Season Watched
                     </button>
@@ -462,7 +463,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                   </div>
                 </div>
               ) : filteredEpisodes.map((ep, index) => {
-                const released = ep.airstamp ? new Date(ep.airstamp) <= new Date() : false;
+                const released = isEpisodeReleased(ep);
                 
                 return (
                   <div key={ep.id} className={`flex flex-wrap sm:flex-nowrap items-center gap-4 p-3 rounded-xl border ${ep.watched ? 'bg-slate-50 dark:bg-slate-950/50 border-slate-200 dark:border-slate-800/50 opacity-60' : 'bg-slate-100/80 dark:bg-slate-800/30 border-slate-200 dark:border-slate-700/50'}`}>
@@ -472,7 +473,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                     <div className="flex-1 min-w-0">
                       <h4 className="text-slate-900 dark:text-white font-bold truncate text-base">{ep.name}</h4>
                       <p className="text-slate-500 dark:text-slate-400 text-xs truncate">
-                        {ep.airdate ? new Date(ep.airstamp || ep.airdate).toLocaleDateString() : "TBA"}
+                        {getEpisodeReleaseTime(ep) ? getEpisodeReleaseTime(ep)!.toLocaleDateString() : "TBA"}
                       </p>
                       {ep.summary && (
                         <ExpandableText 
@@ -545,14 +546,14 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                           </button>
                         )}
                       </div>
-                    ) : ep.airstamp ? (
+                    ) : getEpisodeReleaseTime(ep) ? (
                       <div className="flex items-center gap-2 shrink-0 w-full justify-end sm:w-auto mt-3 sm:mt-0">
                         <AddToCalendarButton 
                           showName={show.name}
                           season={ep.season}
                           number={ep.number}
                           epTitle={ep.name}
-                          airstamp={ep.airstamp}
+                          airstamp={getEpisodeReleaseTime(ep)?.toISOString() || ""}
                           runtimeMinutes={show.runtime}
                         />
                       </div>

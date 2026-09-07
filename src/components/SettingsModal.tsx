@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { UserShow } from '../types';
-import { Download, Upload, X, CheckCircle2, AlertCircle, Bell, BellRing, Smartphone } from 'lucide-react';
+import { Download, Upload, X, CheckCircle2, AlertCircle, Bell, BellRing, Smartphone, Server } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { writeBatch, doc } from 'firebase/firestore';
 import { 
@@ -13,6 +13,7 @@ import {
   isIOS, 
   isStandalonePWA 
 } from '../lib/notifications';
+import { getAioStreamsBaseUrl } from '../lib/debrid';
 
 export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onClose: () => void, shows: UserShow[] }) {
   const [currentPin, setCurrentPin] = useState('');
@@ -21,21 +22,82 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [importStatus, setImportStatus] = useState<{type: 'idle' | 'loading' | 'success' | 'error', message: string}>({ type: 'idle', message: '' });
-  const [rdToken, setRdToken] = useState('');
-  const [rdStatus, setRdStatus] = useState<{type: 'idle' | 'success' | 'error', message: string}>({ type: 'idle', message: '' });
+
+  const [aiostreamsUrl, setAiostreamsUrl] = useState('');
+  const [aiostreamsSaved, setAiostreamsSaved] = useState(false);
+
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">('default');
   const [notifEnabled, setNotifEnabled] = useState(false);
   const [testNotifSent, setTestNotifSent] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [providerError, setProviderError] = useState('');
+
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('REALDEBRID_API_TOKEN');
-      if (token) setRdToken(token);
+    if (typeof window !== 'undefined' && isOpen) {
       setNotifPermission(getNotificationPermissionStatus());
       setNotifEnabled(areNotificationsEnabled());
+      
+      const currentUrl = localStorage.getItem("aiostreams_base_url") || "";
+      const envUrl = (import.meta as any).env?.VITE_AIOSTREAMS_BASE_URL?.trim();
+      
+      if (currentUrl && envUrl) {
+        const normCurrent = currentUrl.replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "");
+        const normEnv = envUrl.replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "");
+        
+        if (normCurrent === normEnv) {
+          localStorage.removeItem("aiostreams_base_url");
+          setAiostreamsUrl('');
+        } else {
+          setAiostreamsUrl(currentUrl);
+        }
+      } else {
+        setAiostreamsUrl(currentUrl);
+      }
     }
   }, [isOpen]);
+
+  const handleSaveAiostreamsUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (typeof window !== 'undefined') {
+      const trimmed = aiostreamsUrl.trim();
+      setProviderError('');
+      
+      if (trimmed) {
+        setLoading(true);
+        const normalized = trimmed.replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "");
+        const manifestUrl = normalized + "/manifest.json";
+        
+        try {
+          const proxyUrl = `/api/debrid/stream?url=${encodeURIComponent(manifestUrl)}`;
+          const resp = await fetch(proxyUrl);
+          
+          if (!resp.ok) {
+            throw new Error(`Provider manifest unreachable (HTTP ${resp.status})`);
+          }
+          
+          const envUrl = (import.meta as any).env?.VITE_AIOSTREAMS_BASE_URL?.trim();
+          if (envUrl && normalized === envUrl.replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "")) {
+            localStorage.removeItem("aiostreams_base_url");
+            setAiostreamsUrl('');
+          } else {
+            localStorage.setItem("aiostreams_base_url", trimmed);
+          }
+          
+          setAiostreamsSaved(true);
+          setTimeout(() => setAiostreamsSaved(false), 2500);
+        } catch (err: any) {
+          setProviderError(err.message || "Failed to validate provider.");
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        localStorage.removeItem("aiostreams_base_url");
+        setAiostreamsSaved(true);
+        setTimeout(() => setAiostreamsSaved(false), 2500);
+      }
+    }
+  };
 
   const handleToggleNotifications = async () => {
     if (notifPermission !== 'granted') {
@@ -53,31 +115,21 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
     }
   };
 
-  const handleSendTestNotification = () => {
-    sendLocalNotification(
-      "📺 NextUp Episode Alert Test",
-      "Notification setup successful! You will receive alerts when new episodes in your library air.",
-      "/icon-192.png"
-    );
-    setTestNotifSent(true);
-    setTimeout(() => setTestNotifSent(false), 3000);
-  };
-
-  const handleSaveRdToken = (e: React.FormEvent) => {
-    e.preventDefault();
-    setRdStatus({ type: 'idle', message: '' });
-    
-    if (typeof window !== 'undefined') {
-      if (!rdToken.trim()) {
-        localStorage.removeItem('REALDEBRID_API_TOKEN');
-        setRdStatus({ type: 'success', message: 'Token removed successfully' });
-      } else {
-        localStorage.setItem('REALDEBRID_API_TOKEN', rdToken.trim());
-        setRdStatus({ type: 'success', message: 'Token saved successfully!' });
-      }
+  const handleSendTestNotification = async () => {
+    try {
+      await sendLocalNotification(
+        "📺 NextUp Episode Alert Test",
+        "Notification setup successful! You will receive alerts when new episodes in your library air.",
+        "/icon-192.png"
+      );
+      setTestNotifSent(true);
+      setTimeout(() => setTestNotifSent(false), 3000);
+    } catch (error) {
+      console.error("Test notification failed:", error);
     }
   };
-  
+
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) onClose();
@@ -255,6 +307,63 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
         </form>
 
         <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
+          <div className="flex items-center gap-2 mb-2">
+            <Server className="w-5 h-5 text-orange-500" />
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white">Stream Provider (AIOStreams / Torrentio)</h3>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 text-sm mb-3">
+            Configure your custom Stremio addon or AIOStreams manifest URL (e.g., Real-Debrid, Torrentio, or private AIOStreams instance).
+          </p>
+          <form onSubmit={handleSaveAiostreamsUrl} className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                Manifest or Base URL
+              </label>
+              <input
+                type="url"
+                value={aiostreamsUrl}
+                onChange={(e) => setAiostreamsUrl(e.target.value)}
+                placeholder="https://torrentio.strem.fun or https://aiostreams.../manifest.json"
+                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl py-2.5 px-3.5 text-slate-900 dark:text-white text-xs font-mono focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
+              />
+            </div>
+            {aiostreamsSaved && (
+              <p className="text-emerald-500 text-xs flex items-center gap-1 font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Stream provider URL saved successfully!
+              </p>
+            )}
+            {providerError && (
+              <p className="text-red-500 text-xs flex items-center gap-1 font-medium">
+                <X className="w-3.5 h-3.5" /> {providerError}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-500/50 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition-all shadow-md shadow-orange-500/20"
+              >
+                {loading ? 'Validating...' : 'Save Provider URL'}
+              </button>
+              {aiostreamsUrl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiostreamsUrl('');
+                    localStorage.removeItem("aiostreams_base_url");
+                    setAiostreamsSaved(true);
+                    setTimeout(() => setAiostreamsSaved(false), 2500);
+                  }}
+                  className="px-3 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold transition-colors"
+                >
+                  Reset Default
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+
+        <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <BellRing className="w-5 h-5 text-orange-500" />
@@ -268,7 +377,7 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
           </div>
 
           <p className="text-slate-600 dark:text-slate-400 text-sm mb-4">
-            Get instant push alerts on your phone or desktop when new episodes of shows in your library air!
+            Get in-app notifications on your phone or desktop when new episodes of shows in your library air!
           </p>
 
           {isIOS() && !isStandalonePWA() && (
@@ -278,7 +387,7 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
                 <span>iOS Web Push Requirement</span>
               </div>
               <p className="leading-relaxed">
-                On iOS (iPhone/iPad), Apple requires adding NextUp to your <strong>Home Screen</strong> to receive push alerts:
+                On iOS (iPhone/iPad), Apple requires adding NextUp to your <strong>Home Screen</strong> to receive notifications:
               </p>
               <ol className="list-decimal list-inside space-y-0.5 opacity-90">
                 <li>Tap Safari's <strong>Share</strong> button (box with arrow up)</li>
@@ -320,39 +429,7 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
           </div>
         </div>
 
-        <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
-          <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Real-Debrid Integration</h3>
-          <p className="text-slate-600 dark:text-slate-400 text-sm mb-4">Add your Real-Debrid API token to enable high-speed direct stream playback.</p>
-          
-          <form onSubmit={handleSaveRdToken} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">API Token</label>
-              <input
-                type="password"
-                value={rdToken}
-                onChange={(e) => setRdToken(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl py-3 px-4 text-slate-900 dark:text-white focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all font-mono text-sm"
-                placeholder="Paste your token here..."
-              />
-              <p className="text-xs text-slate-500 mt-2">
-                Get your token from <a href="https://real-debrid.com/apitoken" target="_blank" rel="noopener noreferrer" className="text-orange-500 hover:underline">real-debrid.com/apitoken</a>
-              </p>
-            </div>
-            
-            {rdStatus.message && (
-              <p className={`text-sm ${rdStatus.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                {rdStatus.message}
-              </p>
-            )}
 
-            <button
-              type="submit"
-              className="w-full bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-bold py-3 rounded-xl transition-all"
-            >
-              Save Token
-            </button>
-          </form>
-        </div>
 
         <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
           <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Data Backup</h3>

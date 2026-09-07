@@ -1,59 +1,20 @@
 import { Show } from "../types";
+import { getCached as apiGetCached, setCached as apiSetCached } from "./apiCache";
+
+function getCached<T>(key: string) { return apiGetCached<T>("tmdb", "legacy", [key]); }
+function setCached<T>(key: string, data: T, ttl = 60) { apiSetCached<T>("tmdb", "legacy", [key], data, ttl); }
+import { fetchJson } from "./httpClient";
 
 const BASE_URL = "https://api.themoviedb.org/3";
 const API_KEY = (import.meta as any).env.VITE_TMDB_API_KEY || (import.meta as any).env.TMDB_API_KEY;
-
-function getCached<T>(key: string): T | null {
-  const cached = localStorage.getItem(key);
-  if (!cached) return null;
-  try {
-    const { data, expiry } = JSON.parse(cached);
-    if (Date.now() > expiry) return null;
-    return data as T;
-  } catch {
-    return null;
-  }
-}
-
-function setCached<T>(key: string, data: T, ttlMinutes = 60) {
-  try {
-    localStorage.setItem(key, JSON.stringify({
-      data,
-      expiry: Date.now() + ttlMinutes * 60 * 1000
-    }));
-  } catch (e: any) {
-    console.warn('Cache write failed', e);
-    if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-      // Cleanup all tmdb_ and tvmaze_ and search_ keys
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && (k.startsWith('tmdb_') || k.startsWith('tvm_') || k.startsWith('search_'))) {
-          keysToRemove.push(k);
-        }
-      }
-      keysToRemove.forEach(k => localStorage.removeItem(k));
-      // Retry once after clearing
-      try {
-        localStorage.setItem(key, JSON.stringify({
-          data,
-          expiry: Date.now() + ttlMinutes * 60 * 1000
-        }));
-      } catch (retryErr) {
-        console.warn('Cache write failed after cleanup', retryErr);
-      }
-    }
-  }
-}
-
-async function fetchTMDB(endpoint: string, params: Record<string, string> = {}, signal?: AbortSignal) {
+export async function fetchTMDB(endpoint: string, params: Record<string, string> = {}, signal?: AbortSignal) {
   const url = new URL(`${BASE_URL}${endpoint}`);
   url.searchParams.append('api_key', API_KEY);
   Object.entries(params).forEach(([k, v]) => url.searchParams.append(k, v));
   
-  const res = await fetch(url.toString(), { signal });
-  if (!res.ok) throw new Error(`TMDB error: ${res.status}`);
-  return res.json();
+  return fetchJson<any>(url.toString(), { signal, concurrencyGroup: "tmdb", timeoutMs: 15000, retries: 2 });
+  
+  
 }
 
 function enrichTMDBShow(tmdbShow: any): Show {
@@ -137,33 +98,47 @@ export async function getForYouTMDB(): Promise<Show[]> {
   return shows;
 }
 
-export async function getRecommendationsTMDB(tmdbIds: number[]): Promise<Show[]> {
-  if (!tmdbIds.length) return [];
-  const cacheKey = `tmdb_recs_${tmdbIds.join('_')}`;
+export async function getRecommendationsTMDB(seeds: {id: number, isMovie: boolean}[]): Promise<Show[]> {
+  if (!seeds.length) return [];
+  const cacheKey = `tmdb_recs_${seeds.map(s => `${s.id}_${s.isMovie}`).join('_')}`;
   const cached = getCached<Show[]>(cacheKey);
   if (cached) return cached;
 
-  const allRecs = new Map<number, any>();
+  const allRecs = new Map<string, any>();
+  const isMovieMap = new Map<string, boolean>();
   // fetch recommendations for up to 3 recent shows
-  const targetIds = tmdbIds.slice(0, 3);
+  const targets = seeds.slice(0, 3);
   
-  await Promise.all(targetIds.map(async (id) => {
+  await Promise.all(targets.map(async ({id, isMovie}) => {
     try {
-      const data = await fetchTMDB(`/tv/${id}/recommendations`);
-      data.results.forEach((show: any) => {
-        if (!allRecs.has(show.id)) allRecs.set(show.id, show);
+      const endpoint = isMovie ? `/movie/${id}/recommendations` : `/tv/${id}/recommendations`;
+      const data = await fetchTMDB(endpoint);
+      data.results.forEach((item: any) => {
+        const itemIsMovie = item.media_type === "movie" || isMovie;
+        const key = `${itemIsMovie ? 'movie' : 'tv'}:${item.id}`;
+        if (!allRecs.has(key)) {
+          allRecs.set(key, item);
+          isMovieMap.set(key, itemIsMovie);
+        }
       });
     } catch (e) {
       console.warn("Failed fetching recs for", id, e);
     }
   }));
 
-  const sorted = Array.from(allRecs.values())
-    .sort((a, b) => b.popularity - a.popularity)
-    .filter(s => !tmdbIds.includes(s.id) && !(JSON.parse(localStorage.getItem('nextup_dismissed_recs') || '[]')).includes(s.id))
+  const excludedKeys = seeds.map(s => `${s.isMovie ? 'movie' : 'tv'}:${s.id}`);
+  const dismissedRecsKeys = JSON.parse(localStorage.getItem('nextup_dismissed_recs') || '[]');
+  
+  const sortedKeys = Array.from(allRecs.keys())
+    .sort((a, b) => allRecs.get(b).popularity - allRecs.get(a).popularity)
+    .filter(key => !excludedKeys.includes(key) && !dismissedRecsKeys.includes(key))
     .slice(0, 10);
 
-  const shows = sorted.map(enrichTMDBShow);
+  const shows = sortedKeys.map(key => {
+    const item = allRecs.get(key);
+    return isMovieMap.get(key) ? enrichTMDBMovie(item) : enrichTMDBShow(item);
+  });
+  
   setCached(cacheKey, shows);
   return shows;
 }

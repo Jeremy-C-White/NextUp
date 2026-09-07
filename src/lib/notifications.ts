@@ -75,7 +75,9 @@ function markEpisodeAsNotified(epId: string): void {
 }
 
 export async function sendLocalNotification(title: string, body: string, icon?: string, tag?: string) {
-  if (!isNotificationSupported() || Notification.permission !== "granted") return;
+  if (!isNotificationSupported() || Notification.permission !== "granted") {
+    throw new Error("Notifications are not supported or permitted.");
+  }
 
   try {
     // Try using Service Worker registration if available for best mobile/iOS support
@@ -101,14 +103,18 @@ export async function sendLocalNotification(title: string, body: string, icon?: 
     });
   } catch (err) {
     console.error("Failed to trigger local notification:", err);
+    throw err;
   }
 }
+
+
+const inFlightNotifications = new Set<string>();
 
 /**
  * Checks user library for episodes that have aired recently (within last 24h)
  * or are airing today, and fires alerts if they haven't been notified yet.
  */
-export function checkAndNotifyUpcomingEpisodes(shows: UserShow[]) {
+export async function checkAndNotifyUpcomingEpisodes(shows: UserShow[]) {
   if (!isNotificationSupported() || Notification.permission !== "granted" || !areNotificationsEnabled()) {
     return;
   }
@@ -116,37 +122,47 @@ export function checkAndNotifyUpcomingEpisodes(shows: UserShow[]) {
   const notified = getNotifiedEpisodeIds();
   const now = new Date().getTime();
   const oneDayAgo = now - 24 * 60 * 60 * 1000;
-  const twoHoursInFuture = now + 2 * 60 * 60 * 1000;
+  
+  for (const show of shows) {
+    if (!show.episodes || show.episodes.length === 0) continue;
 
-  shows.forEach((show) => {
-    if (!show.episodes || show.episodes.length === 0) return;
-
-    show.episodes.forEach((ep) => {
-      if (!ep.airstamp) return;
+    for (const ep of show.episodes) {
+      if (!ep.airstamp) continue;
       const airTime = new Date(ep.airstamp).getTime();
-      if (isNaN(airTime)) return;
+      if (isNaN(airTime)) continue;
+      
+      const isUpcoming = airTime > now;
+      const timeDiffMins = Math.round((airTime - now) / 60000);
+      
+      let title = "";
+      let body = "";
+      let phaseKey = "";
 
-      const uniqueEpKey = `${show.id}_S${ep.season}E${ep.number}`;
-
-      // Check if episode aired in the last 24 hours OR is airing in the next 2 hours, and hasn't been notified
-      if (airTime >= oneDayAgo && airTime <= twoHoursInFuture && !notified.has(uniqueEpKey)) {
-        const isUpcoming = airTime > now;
-        const timeDiffMins = Math.round((airTime - now) / 60000);
-
-        let title = `📺 New Episode Airing!`;
-        let body = `${show.name} S${ep.season} E${ep.number} (${ep.name}) is airing today!`;
-
-        if (isUpcoming && timeDiffMins > 0 && timeDiffMins <= 120) {
-          title = `🔔 Airing Soon: ${show.name}`;
-          body = `S${ep.season} E${ep.number} (${ep.name}) airs in ${timeDiffMins} minutes!`;
-        } else if (!isUpcoming) {
-          title = `🎉 Now Available: ${show.name}`;
-          body = `S${ep.season} E${ep.number} (${ep.name}) has officially aired. Tap to watch!`;
-        }
-
-        sendLocalNotification(title, body, show.imageUrl, uniqueEpKey);
-        markEpisodeAsNotified(uniqueEpKey);
+      if (isUpcoming && timeDiffMins > 0 && timeDiffMins <= 120) {
+          phaseKey = `${show.id}_S${ep.season}E${ep.number}_soon`;
+          if (!notified.has(phaseKey) && !inFlightNotifications.has(phaseKey)) {
+             title = `🔔 Airing Soon: ${show.name}`;
+             body = `S${ep.season} E${ep.number} (${ep.name}) airs in ${timeDiffMins} minutes!`;
+          }
+      } else if (!isUpcoming && airTime >= oneDayAgo) {
+          phaseKey = `${show.id}_S${ep.season}E${ep.number}_avail`;
+          if (!notified.has(phaseKey) && !inFlightNotifications.has(phaseKey)) {
+             title = `🎉 Now Available: ${show.name}`;
+             body = `S${ep.season} E${ep.number} (${ep.name}) has officially aired. Tap to watch!`;
+          }
       }
-    });
-  });
+
+      if (title && body && phaseKey) {
+        inFlightNotifications.add(phaseKey);
+        try {
+          await sendLocalNotification(title, body, show.imageUrl, phaseKey);
+          markEpisodeAsNotified(phaseKey);
+        } catch (e) {
+          console.error("Failed to notify", e);
+        } finally {
+          inFlightNotifications.delete(phaseKey);
+        }
+      }
+    }
+  }
 }

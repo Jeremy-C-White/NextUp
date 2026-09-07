@@ -36,12 +36,12 @@ export function LibraryTab({
       if (ep.watched) {
         epsTotal++;
         minutesTotal += ep.runtime || 0;
-        if (!showWatchCounts[ep.showId]) {
-           const show = shows.find(s => s.id === ep.showId.toString() || s.tvmazeId === ep.showId || s.imdbId === ep.showId?.toString());
-           showWatchCounts[ep.showId] = { name: "Unknown Show", count: 0 };
-           if (show) showWatchCounts[ep.showId].name = show.name;
+        if (!showWatchCounts[String(ep.showId)]) {
+           const show = shows.find(s => s.id === String(ep.showId) || s.tvmazeId === ep.showId || s.imdbId === String(ep.showId));
+           showWatchCounts[String(ep.showId)] = { name: "Unknown Show", count: 0 };
+           if (show) showWatchCounts[String(ep.showId)].name = show.name || "Unknown Show";
         }
-        showWatchCounts[ep.showId].count++;
+        showWatchCounts[String(ep.showId)].count++;
       }
     });
   });
@@ -126,7 +126,7 @@ export function LibraryTab({
               {show.imageUrl ? (
                 <img decoding="async" referrerPolicy="no-referrer" loading="lazy" src={show.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity" />
               ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-4xl font-bold text-slate-800">{show.name[0]}</div>
+                <div className="absolute inset-0 flex items-center justify-center text-4xl font-bold text-slate-800">{(show.name || "?")[0]}</div>
               )}
               <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent p-4 flex flex-col justify-end pointer-events-none">
                 <span className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-1">

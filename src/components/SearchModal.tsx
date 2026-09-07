@@ -15,33 +15,40 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Show[]>([]);
   const [loading, setLoading] = useState(false);
-
-
-
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    const timer = setTimeout(async () => {
-      if (query.length > 2) {
-        setLoading(true);
+    const trimmedQuery = query.trim();
+    
+    if (trimmedQuery.length > 2) {
+      setLoading(true);
+      setError(null);
+      setResults([]);
+      const timer = setTimeout(async () => {
         try {
-          const res = await searchMultiTMDB(query, controller.signal);
+          const res = await searchMultiTMDB(trimmedQuery, controller.signal);
           if (!controller.signal.aborted) {
             setResults(res.slice(0, 10));
+            setLoading(false);
           }
-        } catch (e) {
-          if (!controller.signal.aborted) console.error(e);
-        } finally {
-          if (!controller.signal.aborted) setLoading(false);
+        } catch (e: any) {
+          if (!controller.signal.aborted) {
+            console.error(e);
+            setError(e.message || "Failed to search");
+            setLoading(false);
+          }
         }
-      } else {
-        setResults([]);
-      }
-    }, 300);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
+      }, 300);
+      return () => {
+        clearTimeout(timer);
+        controller.abort();
+      };
+    } else {
+      setResults([]);
+      setLoading(false);
+      setError(null);
+    }
   }, [query]);
 
   
@@ -91,6 +98,10 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
         </div>
 
         <div className="flex-1 overflow-y-auto overscroll-contain px-6 pb-6">
+          {error && <div className="text-center text-red-500 py-8 font-medium">{error}</div>}
+          {!loading && !error && query.trim().length > 2 && results.length === 0 && (
+            <div className="text-center text-slate-600 dark:text-slate-400 py-8">No results found for "{query.trim()}"</div>
+          )}
           {loading && <div className="text-center text-slate-600 dark:text-slate-400 py-8 animate-pulse">Searching...</div>}
           
           <div className="space-y-3">
@@ -99,7 +110,7 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
     if (s.imdbId && show.externals?.imdb && s.imdbId === show.externals.imdb) return true;
     if (s.isMovie === show.isMovie && s._tmdbId && show._tmdbId && s._tmdbId === show._tmdbId) return true;
     if (s.tvmazeId && show.id > 0 && s.tvmazeId === show.id) return true;
-    if (s.name.toLowerCase() === show.name.toLowerCase() && (s.premiered?.split('-')[0] === show.premiered?.split('-')[0])) return true;
+    if (s.name && show.name && s.name.toLowerCase() === show.name.toLowerCase() && (s.premiered?.split('-')[0] === show.premiered?.split('-')[0])) return true;
     return false;
   });
               return (
@@ -108,7 +119,7 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
                     <img decoding="async" referrerPolicy="no-referrer" loading="lazy" src={show.image.medium} alt={show.name} className="w-16 h-24 object-cover rounded-xl bg-slate-200 dark:bg-slate-800" />
                   ) : (
                     <div className="w-16 h-24 bg-slate-200 dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 font-bold text-xl">
-                      {show.name[0]}
+                      {(show.name || "?")[0]}
                     </div>
                   )}
                   <div className="flex-1 min-w-0 py-1">
