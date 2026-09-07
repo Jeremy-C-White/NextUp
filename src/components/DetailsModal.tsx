@@ -22,7 +22,7 @@ interface Props {
   inLibrary?: boolean;
   onAdd?: (caughtUp: boolean) => void;
   addingShowId?: number | null;
-  onPlayEpisode?: (showId: string, imdbId: string | undefined, episode: UserEpisode, contextEpisodes?: UserEpisode[]) => void;
+  onPlayEpisode?: (showId: string, imdbId: string | undefined, episode: UserEpisode) => void;
 }
 
 export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onToggleWatched, onMarkThrough, inLibrary, onAdd, addingShowId, onPlayEpisode }: Props) {
@@ -202,7 +202,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
 
   const handlePlayEpisode = async (episode: UserEpisode) => {
     if (onPlayEpisode) {
-      onPlayEpisode(show.id, resolvedLocalImdb || show.imdbId, episode, displayEpisodes);
+      onPlayEpisode(show.id, resolvedLocalImdb || show.imdbId, episode);
     }
   };
 

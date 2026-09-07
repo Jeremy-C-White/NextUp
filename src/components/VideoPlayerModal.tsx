@@ -7,7 +7,6 @@ import { getShow, resolveTVMazeShow } from "../lib/tvmaze";
 import { doc, setDoc } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { removeUndefined } from "../lib/library";
-import { getIntroDBSegments, IntroDBSegment } from "../lib/introdb";
 
 const formatBytes = (bytes?: number) => {
   if (!bytes) return "";
@@ -65,15 +64,12 @@ function StreamBadges({ cand, isExternal }: { cand: PlaybackCandidate, isExterna
 
 interface VideoPlayerModalProps {
   request: PlaybackRequest;
-  nextRequest?: PlaybackRequest;
-  alternativeRequests?: PlaybackRequest[];
-  onPlayNext?: (req: PlaybackRequest) => void;
   onClose: () => void;
 }
 
 type PlayerMode = 'loading' | 'mp4_play' | 'mkv_transition' | 'error';
 
-export function VideoPlayerModal({ request, nextRequest, alternativeRequests, onClose, onPlayNext }: VideoPlayerModalProps) {
+export function VideoPlayerModal({ request, onClose }: VideoPlayerModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const isIOS = /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -98,120 +94,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, on
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [sourceValidated, setSourceValidated] = useState(false);
   const [resolutionAttempt, setResolutionAttempt] = useState(0);
-  const [introDBSegments, setIntroDBSegments] = useState<IntroDBSegment[]>([]);
-  const [ignoredSegmentTypes, setIgnoredSegmentTypes] = useState<Set<string>>(new Set());
-  const [playbackClock, setPlaybackClock] = useState({ current: 0, duration: 0, playing: false });
-  const [activeSkipSegment, setActiveSkipSegment] = useState<IntroDBSegment | null>(null);
-  
-  const [creditsAutoplayCountdown, setCreditsAutoplayCountdown] = useState<number | null>(null);
-  const [autoplayCountdown, setAutoplayCountdown] = useState<number | null>(null);
-  const [episodeEnded, setEpisodeEnded] = useState(false);
-  const [shouldWarmNextSource, setShouldWarmNextSource] = useState(false);
-  
-  // Ref to prevent multiple triggers
-  const skipExecutionLock = useRef(false);
-
-  useEffect(() => {
-    skipExecutionLock.current = false;
-    async function loadIntroDB() {
-      if (request.imdbId && !request.isMovie) {
-        const segments = await getIntroDBSegments(request.imdbId, request.season, request.number);
-        setIntroDBSegments(segments);
-      }
-    }
-    loadIntroDB();
-  }, [request]);
-
-  useEffect(() => {
-    // Find active skip segment
-    if (playbackClock.current === 0 || playbackClock.duration === 0) {
-      setActiveSkipSegment(null);
-      return;
-    }
-    const active = introDBSegments.find(s => 
-      playbackClock.current >= s.start_sec && 
-      playbackClock.current < s.end_sec && 
-      !ignoredSegmentTypes.has(s.segment_type)
-    );
-    setActiveSkipSegment(active || null);
-    
-    // Evaluate if we should warm next source
-    const outroStart = introDBSegments.find(s => s.segment_type === "outro")?.start_sec;
-    if (episodeEnded || creditsAutoplayCountdown !== null || (outroStart && playbackClock.current >= Math.max(0, outroStart - 180))) {
-      setShouldWarmNextSource(true);
-    }
-  }, [playbackClock.current, playbackClock.duration, introDBSegments, ignoredSegmentTypes, episodeEnded, creditsAutoplayCountdown]);
-
-  // Credits Autoplay Trigger
-  useEffect(() => {
-    // Trigger Condition: creditsWindowActive
-    const isOutroActive = activeSkipSegment?.segment_type === "outro";
-    // Or mathematically: within last 60 seconds if no outro segment (for simplicity, relying on outro segment)
-    // We'll use just the outro segment for now if it exists, or if within last 30s.
-    const outroSegment = introDBSegments.find(s => s.segment_type === "outro");
-    const passedOutroStart = outroSegment && playbackClock.current >= outroSegment.start_sec;
-    const creditsWindowActive = isOutroActive || passedOutroStart || (playbackClock.duration > 0 && playbackClock.duration - playbackClock.current <= 30 && !outroSegment);
-    
-    if (creditsWindowActive && creditsAutoplayCountdown === null && !episodeEnded && nextRequest) {
-      setCreditsAutoplayCountdown(15);
-    } else if (!creditsWindowActive && creditsAutoplayCountdown !== null) {
-      setCreditsAutoplayCountdown(null);
-    }
-  }, [activeSkipSegment, playbackClock.current, playbackClock.duration, creditsAutoplayCountdown, episodeEnded, nextRequest, introDBSegments]);
-
-  // Credits Tick Loop
-  useEffect(() => {
-    if (creditsAutoplayCountdown !== null && creditsAutoplayCountdown > 0 && playbackClock.playing) {
-      const timer = window.setTimeout(() => setCreditsAutoplayCountdown(c => c !== null ? c - 1 : null), 1000);
-      return () => clearTimeout(timer);
-    }
-    if (creditsAutoplayCountdown === 0) {
-      startNextEpisode();
-    }
-  }, [creditsAutoplayCountdown, playbackClock.playing]);
-
-  // Post-Video End Tick Loop
-  useEffect(() => {
-    if (autoplayCountdown !== null && autoplayCountdown > 0) {
-      const timer = window.setTimeout(() => setAutoplayCountdown(c => c !== null ? c - 1 : null), 1000);
-      return () => clearTimeout(timer);
-    }
-    if (autoplayCountdown === 0) {
-      startNextEpisode();
-    }
-  }, [autoplayCountdown]);
-
-  // Pre-warming Next Episode
-  useEffect(() => {
-    if (shouldWarmNextSource && nextRequest?.imdbId && nextRequest.imdbId !== "none") {
-      // Just fetch it to populate cache, don't await or store result
-      getBestTorrentioStream(nextRequest.imdbId, nextRequest.season, nextRequest.number, nextRequest.isMovie ? "movie" : "series").catch(() => {});
-    }
-  }, [shouldWarmNextSource, nextRequest]);
-
-  const startNextEpisode = () => {
-    if (nextRequest && onPlayNext && !skipExecutionLock.current) {
-      skipExecutionLock.current = true;
-      onPlayNext(nextRequest);
-    }
-  };
-
-  const skipActiveSegment = () => {
-    if (!activeSkipSegment || !videoRef.current) return;
-    if (activeSkipSegment.segment_type === "outro" && nextRequest) {
-      startNextEpisode();
-    } else {
-      videoRef.current.currentTime = Math.min(videoRef.current.duration, activeSkipSegment.end_sec + 0.25);
-    }
-  };
-
-  const handleEpisodeEnded = () => {
-    setEpisodeEnded(true);
-    setCreditsAutoplayCountdown(null);
-    if (nextRequest) {
-      setAutoplayCountdown(10);
-    }
-  };
   
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const playAttemptedForSourceRef = useRef(false);
@@ -237,56 +119,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, on
   const currentMp4Stream = mp4Candidates[candidateIndex]?.url;
   const topMkv = mkvCandidates[0];
 
-useEffect(() => {
-    async function resolvePlayback() {
-      setEpisodeEnded(false);
-      setCreditsAutoplayCountdown(null);
-      setAutoplayCountdown(null);
-      setPlaybackClock({ current: 0, duration: 0, playing: false });
-      setSourceValidated(false);
-      sourceValidatedRef.current = false;
-      if (!request.imdbId || request.imdbId === "none") {
-        setHasError(true);
-        setStatusText("No stream source available.");
-        return;
-      }
-      
-      try {
-        setIsLoading(true);
-        setHasError(false);
-        setStatusText("Locating title...");
-        
-        const results = await getBestTorrentioStream(
-          request.imdbId,
-          request.season,
-          request.number,
-          request.isMovie ? "movie" : "series",
-          undefined,
-          resolutionAttempt > 0
-        );
-        
-        if (results.length === 0) {
-          setHasError(true);
-          setStatusText("No streams found.");
-          return;
-        }
-        
-        setCandidates(results);
-        setCandidateIndex(0);
-        
-        const mp4s = results.filter(c => c.container === 'web-compatible');
-        if (mp4s.length > 0) {
-          setMode('mp4_play');
-        } else {
-          setMode('mkv_transition');
-        }
-      } catch (err: any) {
-        setHasError(true);
-        setStatusText(err.message || "Failed to find streams");
-      }
-    }
-    resolvePlayback();
-  }, [request, resolutionAttempt]);
   const handleExternalPlay = (url: string) => {
     try {
       openExternalPlayer(url);
@@ -398,23 +230,9 @@ useEffect(() => {
    * the requested file was removed. Keep every source hidden until its duration
    * proves it is a real movie or episode, then reveal it to the user.
    */
-const attemptPlayback = async () => {
-    if (!videoRef.current) return;
-    try {
-      await videoRef.current.play();
-      setAutoplayBlocked(false);
-      setIsLoading(false);
-    } catch (e: any) {
-      if (e.name === 'NotAllowedError') {
-        setAutoplayBlocked(true);
-        setStatusText("Video is ready. Tap play to begin.");
-      } else {
-        console.error("Playback failed", e);
-      }
-    }
-  };
-const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | 'invalid' | 'pending' => {
+  const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | 'invalid' | 'pending' => {
     const duration = video.duration;
+
     if (!Number.isFinite(duration) || duration <= 0) {
       return 'pending';
     }
@@ -427,94 +245,291 @@ const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | '
       setAutoplayBlocked(false);
       setIsLoading(true);
       setStatusText("Skipping an unavailable source...");
+
       // Defer the source change until the current media event finishes.
       window.setTimeout(() => handleNextMp4Candidate(), 0);
       return 'invalid';
     }
 
-    // English Audio Detection & Enforcement
-    const audioTracks = (video as any).audioTracks;
-    if (audioTracks && audioTracks.length > 0) {
-      let englishTrackFound = false;
-      let onlyForeignTracks = true;
-      let englishTrackIndex = -1;
+    sourceValidatedRef.current = true;
+    setSourceValidated(true);
+    setHasError(false);
 
-      for (let i = 0; i < audioTracks.length; i++) {
-        const track = audioTracks[i];
-        const lang = (track.language || '').toLowerCase();
-        const label = (track.label || '').toLowerCase();
-        
-        const isEnglish = lang.includes('en') || label.includes('eng') || label.includes('english');
-        // Match common torrent foreign tags
-        const isForeign = /^(fr|it|es|de|ru|hi|ta|te|ja|ko|zh|pt|pl)$/.test(lang) || /fre|french|ita|spa|ger|rus|hin|tam|tel|jap|kor|chi|por|lat|pol|vostfr/.test(label);
-        
-        if (isEnglish) {
-          englishTrackFound = true;
-          englishTrackIndex = i;
-          onlyForeignTracks = false;
-        } else if (!isForeign && !lang && !label) {
-          onlyForeignTracks = false; // Could be anything
-        }
-      }
-
-      if (englishTrackFound) {
-        // Force the English track
-        for (let i = 0; i < audioTracks.length; i++) {
-          audioTracks[i].enabled = (i === englishTrackIndex);
-        }
-      } else if (onlyForeignTracks && audioTracks.length > 0) {
-        // Failsafe: reject known foreign-only sources
-        sourceValidatedRef.current = false;
-        setSourceValidated(false);
-        setAutoplayBlocked(false);
-        setIsLoading(true);
-        setStatusText("Skipping a source without English audio...");
-        window.setTimeout(() => handleNextMp4Candidate(), 0);
-        return 'invalid';
-      }
+    if (isIOS) {
+      setAutoplayBlocked(true);
+      setIsLoading(false);
+      setStatusText("Video is ready. Tap play to begin.");
     }
 
-    if (!sourceValidatedRef.current) {
-      sourceValidatedRef.current = true;
-      setSourceValidated(true);
-    }
     return 'valid';
-  }, [handleNextMp4Candidate]);
+  }, [handleNextMp4Candidate, isIOS]);
 
   useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+
+    setMode('loading');
+    modeRef.current = 'loading';
+    setCandidates([]);
+    candidatesRef.current = [];
+    mp4CandidatesRef.current = [];
+    mkvCandidatesRef.current = [];
+    setCandidateIndex(0);
+    candidateIndexRef.current = 0;
+    setPlaybackError(null);
+    setPlaybackWarning(null);
+    setHasError(false);
+    setAutoplayBlocked(false);
+    setSourceValidated(false);
+    sourceValidatedRef.current = false;
+    setIsLoading(true);
+    candidateAdvanceLockRef.current = false;
+    playAttemptedForSourceRef.current = false;
+    
+    async function resolveAndFetch() {
+      try {
+        let activeImdbId = request.imdbId && request.imdbId !== "none" ? request.imdbId : undefined;
+        let resolvedTvmazeId = request.tvmazeId;
+        
+        if (!activeImdbId) {
+          setStatusText("Locating title metadata...");
+          if (request.isMovie) {
+            const tmdbId = request._tmdbId || (resolvedTvmazeId && resolvedTvmazeId < 0 ? (-resolvedTvmazeId - 1000000000) : undefined);
+            if (tmdbId) {
+              try {
+                const extIds = await getTMDBExternalIds(tmdbId, true);
+                activeImdbId = extIds.imdb || undefined;
+              } catch (e) {}
+            }
+          } else {
+            if (resolvedTvmazeId && resolvedTvmazeId > 0) {
+              try {
+                const freshShow = await getShow(resolvedTvmazeId);
+                activeImdbId = freshShow.externals?.imdb || undefined;
+              } catch (e) {}
+            }
+            if (!activeImdbId) {
+              const tmdbId = request._tmdbId || (resolvedTvmazeId && resolvedTvmazeId < 0 ? -resolvedTvmazeId : undefined);
+              if (tmdbId) {
+                try {
+                  const extIds = await getTMDBExternalIds(tmdbId, false);
+                  activeImdbId = extIds.imdb || undefined;
+                } catch (e) {}
+              }
+            }
+            if (!activeImdbId) {
+              try {
+                const resolved = await resolveTVMazeShow({
+                  id: resolvedTvmazeId || -1,
+                  name: request.showName,
+                  _tmdbId: request._tmdbId,
+                  isMovie: false
+                } as any);
+                if (resolved) {
+                  if (resolved.id > 0) resolvedTvmazeId = resolved.id;
+                  if (resolved.externals?.imdb) activeImdbId = resolved.externals.imdb;
+                }
+              } catch (e) {}
+            }
+          }
+
+          // Backfill resolved IMDb ID and TVMaze ID to Firestore so existing library items stay fixed forever
+          if (activeImdbId && auth.currentUser && request.showId) {
+            try {
+              const showRef = doc(db, `users/${auth.currentUser.uid}/shows/${request.showId}`);
+              await setDoc(showRef, removeUndefined({
+                imdbId: activeImdbId,
+                ...(resolvedTvmazeId && resolvedTvmazeId > 0 ? { tvmazeId: resolvedTvmazeId } : {})
+              }), { merge: true });
+            } catch (e) {
+              console.warn("Could not backfill resolved metadata to Firestore", e);
+            }
+          }
+        }
+        
+        if (!active || !activeImdbId || activeImdbId === "none") {
+          throw new Error("Unable to locate a valid IMDb ID for this title. Streams cannot be loaded.");
+        }
+        
+        setStatusText("Finding sources...");
+        const forceRefresh = resolutionAttempt > 0;
+        const found = await getBestTorrentioStream(activeImdbId, request.season, request.number, request.isMovie ? 'movie' : 'series', controller.signal, forceRefresh);
+        
+        if (!active) return;
+        
+        if (found.length === 0) {
+          throw new Error("No playable sources found.");
+        }
+
+        const mp4s = found.filter(c => c.container === 'web-compatible');
+        const mkvs = found.filter(c => c.container !== 'web-compatible');
+
+        setCandidates(found);
+        candidatesRef.current = found;
+        mp4CandidatesRef.current = mp4s;
+        mkvCandidatesRef.current = mkvs;
+        
+        if (mp4s.length > 0) {
+          setCandidateIndex(0);
+          candidateIndexRef.current = 0;
+          setMode('mp4_play');
+          modeRef.current = 'mp4_play';
+          startupDeadlineRef.current = Date.now() + 30000;
+          setAutoplayBlocked(false);
+          setSourceValidated(false);
+          sourceValidatedRef.current = false;
+          setIsLoading(true);
+          setStatusText(`Checking MP4 source 1 of ${mp4s.length}...`);
+        } else if (mkvs.length > 0) {
+          setMode('mkv_transition');
+          modeRef.current = 'mkv_transition';
+          setIsLoading(false);
+        } else {
+          setMode('error');
+          modeRef.current = 'error';
+          setPlaybackError("No playable sources found.");
+          setIsLoading(false);
+        }
+      } catch (err: any) {
+        if (!active) return;
+        if (err.name === "AbortError") return;
+
+        setHasError(true);
+        setPlaybackError(err.message);
+        setMode('error');
+        modeRef.current = 'error';
+        setIsLoading(false);
+      }
+    }
+    
+    resolveAndFetch();
+    
+    return () => { 
+      active = false; 
+      controller.abort();
+    };
+  }, [request, resolutionAttempt, isIOS]);
+
+  const attemptPlayback = async () => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (mode !== 'mp4_play' || !currentMp4Stream) {
+    const validation = validateCurrentSource(video);
+    if (validation !== 'valid') {
+      if (validation === 'pending') {
+        setAutoplayBlocked(false);
+        setIsLoading(true);
+        setStatusText("Checking video source...");
+      }
       return;
     }
 
-    let stallTimer: number | null = null;
+    try {
+      setIsLoading(true);
+      await video.play();
+      setAutoplayBlocked(false);
+      setHasError(false);
+      setIsLoading(false);
+      setStatusText("Playing");
+    } catch (error) {
+      const pbError = error instanceof DOMException ? error : null;
+      if (pbError?.name === "NotAllowedError") {
+        setAutoplayBlocked(true);
+        setIsLoading(false);
+        return;
+      }
+      if (pbError?.name === "AbortError") {
+        if (videoRef.current && videoRef.current.paused) {
+          setIsLoading(false);
+          setStatusText("Playback interrupted.");
+          setAutoplayBlocked(true);
+        }
+        return;
+      }
+      setAutoplayBlocked(false);
+      setIsLoading(false);
+      handleNextMp4Candidate();
+    }
+  };
+
+  // Give each direct stream time to expose metadata while it remains hidden.
+  useEffect(() => {
+    if (mode !== 'mp4_play' || !currentMp4Stream) return;
+
+    candidateAdvanceLockRef.current = false;
+    playAttemptedForSourceRef.current = false;
+    sourceValidatedRef.current = false;
+    setSourceValidated(false);
+    setAutoplayBlocked(false);
+    setIsLoading(true);
+    setStatusText(`Checking MP4 source ${candidateIndexRef.current + 1} of ${mp4CandidatesRef.current.length}...`);
+
+    let timeoutDuration = candidateIndexRef.current === 0 ? 15000 : 7000;
+    if (startupDeadlineRef.current !== 0) {
+      const remainingBudget = startupDeadlineRef.current - Date.now();
+      if (remainingBudget > 0 && remainingBudget < timeoutDuration) {
+        timeoutDuration = remainingBudget;
+      } else if (remainingBudget <= 0) {
+        timeoutDuration = 0; // Trigger immediately
+      }
+    }
+    const timeout = window.setTimeout(() => {
+      if (modeRef.current !== 'mp4_play' || sourceValidatedRef.current) return;
+
+      const video = videoRef.current;
+      if (video) {
+        const validation = validateCurrentSource(video);
+        if (validation !== 'pending') return;
+      }
+
+      handleNextMp4Candidate();
+    }, timeoutDuration);
+
+    return () => window.clearTimeout(timeout);
+  }, [currentMp4Stream, mode, handleNextMp4Candidate, validateCurrentSource]);
+
+  useEffect(() => {
+    if (mode !== 'mp4_play') return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
 
     const handleWaiting = () => {
-      if (!autoplayBlocked) setIsLoading(true);
-      stallTimer = window.setTimeout(() => {
-        if (videoRef.current && videoRef.current.readyState < 3 && modeRef.current === 'mp4_play') {
+      if (video.paused || autoplayBlocked) return;
+
+      // Only show spinner if video actually lacks sufficient buffer data
+      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+        setIsLoading(true);
+      }
+
+      if (stallTimer) clearTimeout(stallTimer);
+      const stallDuration = candidateIndexRef.current === 0 ? 15000 : 7000;
+      stallTimer = setTimeout(() => {
+        if (
+          modeRef.current === 'mp4_play' &&
+          !video.paused &&
+          video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+        ) {
           handleNextMp4Candidate();
         }
-      }, 15000);
+      }, stallDuration);
     };
 
     const handlePlaying = () => {
-      if (!video.paused && video.currentTime > 0) {
-        if (!sourceValidatedRef.current) {
-          const validation = validateCurrentSource(video);
-          if (validation !== 'valid') {
-            video.pause();
-            return;
-          }
+      if (!sourceValidatedRef.current) {
+        const validation = validateCurrentSource(video);
+        if (validation !== 'valid') {
+          video.pause();
+          return;
         }
-        setIsLoading(false);
-        setAutoplayBlocked(false);
-        setStatusText("Playing");
-        startupDeadlineRef.current = 0;
-        if (stallTimer) clearTimeout(stallTimer);
       }
+
+      setIsLoading(false);
+      setAutoplayBlocked(false);
+      setStatusText("Playing");
+      startupDeadlineRef.current = 0;
+      if (stallTimer) clearTimeout(stallTimer);
     };
 
     const handleTimeUpdate = () => {
@@ -735,13 +750,12 @@ const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | '
             </div>
           )}
 
-          {currentMp4Stream && (<>
+          {currentMp4Stream && (
             <video
               ref={videoRef}
               src={currentMp4Stream}
               controls
               playsInline
-              autoPlay
               preload={isIOS ? "metadata" : "auto"}
               onPause={() => setShowUI(true)}
               onPlay={() => {
@@ -752,18 +766,10 @@ const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | '
                 setIsLoading(false);
                 setAutoplayBlocked(false);
               }}
-              onEnded={() => handleEpisodeEnded()}
               onTimeUpdate={() => {
-                if (videoRef.current) {
-                  setPlaybackClock({
-                    current: videoRef.current.currentTime,
-                    duration: videoRef.current.duration,
-                    playing: !videoRef.current.paused
-                  });
-                  if (!videoRef.current.paused && videoRef.current.currentTime > 0) {
-                    setIsLoading(false);
-                    setAutoplayBlocked(false);
-                  }
+                if (videoRef.current && !videoRef.current.paused && videoRef.current.currentTime > 0) {
+                  setIsLoading(false);
+                  setAutoplayBlocked(false);
                 }
               }}
               aria-hidden={!sourceValidated}
@@ -773,47 +779,7 @@ const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | '
             >
               Your browser does not support the video tag.
             </video>
-          {/* Segment Skip Buttons */}
-          {activeSkipSegment && (
-            <div className="absolute bottom-24 right-4 sm:right-8 sm:bottom-28 z-[90] flex flex-col gap-2 pointer-events-auto">
-              <button
-                onClick={skipActiveSegment}
-                className="bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white font-bold py-2.5 px-5 rounded-full shadow-lg transition-all flex items-center gap-2 text-sm sm:text-base group"
-              >
-                Skip {activeSkipSegment.segment_type === "outro" ? "Credits" : activeSkipSegment.segment_type === "recap" ? "Recap" : "Intro"}
-                <svg className="w-4 h-4 opacity-70 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-                </svg>
-              </button>
-            </div>
           )}
-
-          {/* Autoplay & Credits Countdown Overlay */}
-          {(creditsAutoplayCountdown !== null || autoplayCountdown !== null) && nextRequest && (
-            <div className="absolute bottom-6 right-4 sm:right-8 sm:bottom-8 z-[95] pointer-events-auto">
-              <div className="bg-slate-950/80 backdrop-blur-xl border border-slate-700/50 p-4 sm:p-5 rounded-2xl shadow-2xl flex items-center gap-4 sm:gap-5 max-w-sm w-full transition-all hover:bg-slate-900/90 hover:border-slate-600/50">
-                <div className="relative w-12 h-12 flex items-center justify-center shrink-0">
-                  <svg className="w-full h-full -rotate-90 text-slate-800" viewBox="0 0 36 36">
-                    <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3"></circle>
-                    <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3" strokeDasharray="100" strokeDashoffset={100 - ((creditsAutoplayCountdown !== null ? creditsAutoplayCountdown : autoplayCountdown!) / (creditsAutoplayCountdown !== null ? 15 : 10)) * 100} className="text-orange-500 transition-all duration-1000 ease-linear"></circle>
-                  </svg>
-                  <span className="absolute text-sm font-bold text-white">{creditsAutoplayCountdown !== null ? creditsAutoplayCountdown : autoplayCountdown}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-orange-400 font-bold tracking-wider uppercase mb-0.5">Playing Next</p>
-                  <h4 className="text-white font-bold text-sm sm:text-base truncate">{nextRequest.showName}</h4>
-                  <p className="text-slate-400 text-xs truncate">S{nextRequest.season} E{nextRequest.number} • {nextRequest.episodeName}</p>
-                </div>
-                <button 
-                  onClick={startNextEpisode}
-                  className="bg-orange-500 hover:bg-orange-400 text-slate-950 p-3 rounded-xl transition-colors shrink-0"
-                >
-                  <PlayCircle className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-          )}
-          </>)}
         </>
       )}
 

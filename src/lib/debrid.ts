@@ -609,23 +609,6 @@ export function getStreamCacheState(stream: StreamOption): StreamCacheState {
   return 'unknown';
 }
 
-
-export function detectAudioLanguage(stream: StreamOption): 'english' | 'multi' | 'non-english' | 'unknown' {
-  const text = getCombinedStreamText(stream).toLowerCase();
-  
-  const multiTags = /\b(dual[- ]?audio|multi|multi[- ]?audio)\b/;
-  const engTags = /\b(eng|english|en)\b/;
-  // Include common foreign tags, avoiding short ambiguous ones unless necessary
-  const foreignTags = /\b(fre|french|ita|italian|spa|spanish|ger|german|rus|russian|hin|hindi|tam|tamil|tel|telugu|jap|japanese|kor|korean|chi|chinese|por|portuguese|lat|latino|pol|polish|vostfr|vf|truefrench|dubbed|dub)\b/;
-  
-  if (multiTags.test(text)) return 'multi';
-  if (engTags.test(text) && foreignTags.test(text)) return 'multi'; // e.g. HIN-ENG
-  if (engTags.test(text)) return 'english';
-  if (foreignTags.test(text)) return 'non-english';
-  
-  return 'unknown';
-}
-
 export function calculateStreamScore(
   stream: StreamOption,
   originalIndex: number,
@@ -667,15 +650,6 @@ export function calculateStreamScore(
   }
 
   score -= getTrailerPenalty(stream, type);
-  const lang = detectAudioLanguage(stream);
-  if (lang === 'english') {
-    score += 250_000;
-  } else if (lang === 'multi') {
-    score += 100_000;
-  } else if (lang === 'non-english') {
-    score -= 750_000;
-  }
-
 
   return score;
 }
@@ -894,7 +868,7 @@ async function fetchBestStreamImpl(
       await readErrorResponse(response);
 
     if (response.status === 504) {
-      throw new Error("Stream provider returned 504 Gateway Timeout. Your AIOStreams instance may be offline, sleeping, or overloaded.");
+      throw new Error("Stream resolution timed out. Please check your network connection or configured AIOStreams/Stremio URL in Settings.");
     } else if (response.status === 502) {
       throw new Error("Unable to reach stream provider directly. Please check your configured URL in Settings.");
     }
@@ -1012,14 +986,8 @@ async function fetchBestStreamImpl(
   cacheState: StreamCacheState;
 }
 
-  
-  const filteredStreams = streamsToProcess.filter(s => detectAudioLanguage(s) !== 'non-english');
-  const finalStreamsToProcess = filteredStreams.length > 0 ? filteredStreams : streamsToProcess; // Fallback just in case? Prompt says completely filter. Let's just strictly filter.
-  // Actually, prompt says completely filters out.
-  const streamsToProcessForCandidates = streamsToProcess.filter(s => detectAudioLanguage(s) !== 'non-english');
-
   const playbackCandidates: PlaybackCandidateInternal[] =
-    streamsToProcessForCandidates.map((stream, index) => {
+    streamsToProcess.map((stream, index) => {
       const directUrl = getDirectStreamUrl(stream);
 
       /*
@@ -1067,7 +1035,7 @@ async function fetchBestStreamImpl(
         score: calculateStreamScore(
           stream,
           index,
-          streamsToProcessForCandidates.length,
+          streamsToProcess.length,
           mobile,
           type,
           season,

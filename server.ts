@@ -13,21 +13,6 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-
-  app.get("/api/introdb", async (req, res) => {
-    const { imdb_id, season, episode } = req.query;
-    try {
-      const response = await fetch(`https://api.introdb.app/segments?imdb_id=${imdb_id}&season=${season}&episode=${episode}`);
-      if (!response.ok) {
-        return res.status(response.status).send(await response.text());
-      }
-      const data = await response.json();
-      res.json(data);
-    } catch (e) {
-      console.error("IntroDB proxy error:", e);
-      res.status(500).json({ error: e.message });
-    }
-  });
   app.get("/api/debrid/stream", async (req, res) => {
     const targetUrl = req.query.url as string;
     if (!targetUrl) {
@@ -37,8 +22,7 @@ async function startServer() {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 135000);
       
-      req.on('aborted', () => {
-        console.log("Client aborted connection");
+      req.on('close', () => {
         controller.abort();
       });
 
@@ -63,7 +47,6 @@ async function startServer() {
       res.json(data);
     } catch (err: any) {
       console.error("Proxy error fetching debrid stream:", err);
-      console.error("Error name:", err.name, "Error message:", err.message);
       if (err.name === "AbortError") {
         res.status(504).json({ error: "Stream resolution timed out upstream" });
       } else {

@@ -13,6 +13,7 @@ const SettingsModal = lazy(() => import("./components/SettingsModal").then(m => 
 const SearchModal = lazy(() => import("./components/SearchModal").then(m => ({ default: m.SearchModal })));
 const DetailsModal = lazy(() => import("./components/DetailsModal").then(m => ({ default: m.DetailsModal })));
 const VideoPlayerModal = lazy(() => import("./components/VideoPlayerModal").then(m => ({ default: m.VideoPlayerModal })));
+const RecommendationModal = lazy(() => import("./components/RecommendationModal").then(m => ({ default: m.RecommendationModal })));
 
 import { UserMenu } from "./components/UserMenu";
 import { AddToCalendarButton } from "./components/AddToCalendarButton";
@@ -131,7 +132,7 @@ export default function App() {
   const [playbackRequest, setPlaybackRequest] = useState<PlaybackRequest | null>(null);
   const [toast, setToast] = useState<{message: string, action?: {label: string, onClick: () => void}} | null>(null);
 
-  const handlePlayEpisode = (showId: string, imdbId: string | undefined, episode: UserEpisode, contextEpisodes?: UserEpisode[]) => {
+  const handlePlayEpisode = (showId: string, imdbId: string | undefined, episode: UserEpisode) => {
     let show = shows.find(s => s.id === showId);
     if (!show && detailsShow?.id === showId) {
       show = detailsShow;
@@ -148,7 +149,6 @@ export default function App() {
       season: episode.season,
       number: episode.number,
       episodeName: episode.name,
-      contextEpisodes,
     });
   };
 
@@ -277,6 +277,7 @@ const loadWithFallback = async (
   const [libraryFilter, setLibraryFilter] = useState<"all" | "watching" | "caught-up" | "ended" | "movies">("all");
   const [librarySearch, setLibrarySearch] = useState("");
   const [librarySort, setLibrarySort] = useState<"name" | "added" | "progress">("added");
+  const [recommendedPick, setRecommendedPick] = useState<{ show: UserShow, nextEp: UserEpisode, progress: number } | null>(null);
   const [isDiscoverLoading, setIsDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const generationRef = useRef(0);
@@ -308,6 +309,7 @@ const loadWithFallback = async (
         setLibraryFilter("all");
         setLibrarySearch("");
         setLibrarySort("added");
+        setRecommendedPick(null);
         setPreviewSource(null);
         setAddingShowId(null);
         setIsSearchOpen(false);
@@ -751,6 +753,33 @@ const loadWithFallback = async (
     }
   }, [shows, episodesMap]);
 
+  const handlePickTonight = () => {
+    if (upNext.length === 0) return;
+    
+    if (upNext.length === 1) {
+      setRecommendedPick(upNext[0]);
+      return;
+    }
+
+    const sorted = [...upNext].sort((a, b) => {
+      const aWatchedAt = Object.values(a.show.watchedEpisodes || {}).filter(v => v !== null) as number[];
+      const bWatchedAt = Object.values(b.show.watchedEpisodes || {}).filter(v => v !== null) as number[];
+      const aMax = aWatchedAt.length ? Math.max(...aWatchedAt) : 0;
+      const bMax = bWatchedAt.length ? Math.max(...bWatchedAt) : 0;
+      return aMax - bMax; // Oldest first
+    });
+    const pool = sorted.slice(0, Math.max(3, Math.floor(sorted.length / 2)));
+    let picked = pool[Math.floor(Math.random() * pool.length)];
+    if (recommendedPick && pool.length > 1) {
+      let attempts = 0;
+      while (picked.show.id === recommendedPick.show.id && attempts < 10) {
+        picked = pool[Math.floor(Math.random() * pool.length)];
+        attempts++;
+      }
+    }
+    setRecommendedPick(picked);
+  };
+
   const fetchDiscover = async () => {
     if (discoverFetchedRef.current || discoverRequestRef.current) return;
     
@@ -808,54 +837,6 @@ const loadWithFallback = async (
       fetchDiscover();
     }
   }, [activeTab]);
-
-  const { nextPlaybackRequest, alternativeRequests } = useMemo(() => {
-    if (!playbackRequest) return { alternativeRequests: [] };
-    
-    // Find next episode
-    let nextReq: PlaybackRequest | undefined;
-    const show = shows.find(s => s.id === playbackRequest.showId) || (detailsShow?.id === playbackRequest.showId ? detailsShow : undefined);
-    if (show) {
-      const eps = episodesMap[show.id] || playbackRequest.contextEpisodes || [];
-      const releasedEps = getReleasedEpisodes(eps, false);
-      const currentIndex = releasedEps.findIndex(e => e.season === playbackRequest.season && e.number === playbackRequest.number);
-      if (currentIndex >= 0 && currentIndex < releasedEps.length - 1) {
-        const nextEp = releasedEps[currentIndex + 1];
-        nextReq = {
-          showId: show.id,
-          showName: show.name,
-          isMovie: show.isMovie,
-          imdbId: show.imdbId && show.imdbId !== "none" ? show.imdbId : undefined,
-          _tmdbId: show._tmdbId,
-          tvmazeId: show.tvmazeId,
-          season: nextEp.season,
-          number: nextEp.number,
-          episodeName: nextEp.name,
-        };
-      }
-    }
-
-    // Alternative requests for fallback (upNext shows excluding current one)
-    const alts: PlaybackRequest[] = [];
-    upNext
-      .filter(u => u.show.id !== playbackRequest.showId)
-      .slice(0, 3)
-      .forEach(u => {
-        alts.push({
-          showId: u.show.id,
-          showName: u.show.name,
-          isMovie: u.show.isMovie,
-          imdbId: u.show.imdbId && u.show.imdbId !== "none" ? u.show.imdbId : undefined,
-          _tmdbId: u.show._tmdbId,
-          tvmazeId: u.show.tvmazeId,
-          season: u.nextEp.season,
-          number: u.nextEp.number,
-          episodeName: u.nextEp.name,
-        });
-      });
-
-    return { nextPlaybackRequest: nextReq, alternativeRequests: alts };
-  }, [playbackRequest, shows, episodesMap, upNext]);
 
   if (loading) {
     return (
@@ -1115,6 +1096,20 @@ const loadWithFallback = async (
               <h2 className="text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">Ready to watch</h2>
               <p className="text-slate-600 dark:text-slate-400">Pick up exactly where you left off.</p>
             </div>
+            {upNext.length > 1 && (
+              <button 
+                onClick={handlePickTonight}
+                className="w-full mb-6 p-4 rounded-2xl bg-gradient-to-r from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 flex items-center justify-between hover:from-indigo-500/30 hover:to-purple-500/30 transition-colors group text-left cursor-pointer"
+              >
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">What should we watch tonight?</h3>
+                  <p className="text-sm text-slate-700 dark:text-slate-300">Let us pick from your queue</p>
+                </div>
+                <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center group-active:scale-95 transition-transform shrink-0 shadow-xl shadow-indigo-500/20">
+                  <PlayCircle className="w-5 h-5 text-slate-900 dark:text-white" />
+                </div>
+              </button>
+            )}
             
             {upNext.length === 0 && (shows.length === 0 || Object.keys(episodesMap).length >= shows.length) ? (
               <div className="bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 border-dashed rounded-3xl p-12 text-center">
@@ -1428,12 +1423,26 @@ const loadWithFallback = async (
       {playbackRequest && (
         <VideoPlayerModal 
           request={playbackRequest}
-          nextRequest={nextPlaybackRequest}
-          alternativeRequests={alternativeRequests}
-          onPlayNext={req => {
-            handlePlayEpisode(req.showId, req.imdbId, { season: req.season, number: req.number, name: req.episodeName, id: "", showId: 0, airdate: "", airstamp: "", imageUrl: "", summary: "", watched: false }, playbackRequest.contextEpisodes);
-          }}
           onClose={() => setPlaybackRequest(null)}
+        />
+      )}
+
+      {recommendedPick && (
+        <RecommendationModal
+          isOpen={!!recommendedPick}
+          onClose={() => setRecommendedPick(null)}
+          show={recommendedPick.show}
+          episode={recommendedPick.nextEp}
+          progress={recommendedPick.progress}
+          onPlayEpisode={(showId, imdbId, episode) => {
+            handlePlayEpisode(showId, imdbId, episode);
+            setRecommendedPick(null);
+          }}
+          onViewDetails={(show) => {
+            setDetailsShow(show);
+            setRecommendedPick(null);
+          }}
+          onReroll={handlePickTonight}
         />
       )}
     </div>

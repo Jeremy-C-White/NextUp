@@ -113,5 +113,4 @@ export interface PlaybackRequest {
   season: number;
   number: number;
   episodeName: string;
-  contextEpisodes?: UserEpisode[];
 }
