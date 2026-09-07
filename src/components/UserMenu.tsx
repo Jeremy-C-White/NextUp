@@ -1,6 +1,19 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useId, useLayoutEffect, useState, useRef, useEffect } from 'react';
 import { Settings, LogOut } from 'lucide-react';
 import { User as FirebaseUser } from 'firebase/auth';
+import { isTvBackKey } from '../lib/webos';
+
+let activeUserMenuDismiss: (() => void) | null = null;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', (event) => {
+    if (!activeUserMenuDismiss || (event.key !== 'Escape' && !isTvBackKey(event))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    activeUserMenuDismiss();
+  }, true);
+}
 
 interface UserMenuProps {
   user: FirebaseUser;
@@ -11,6 +24,24 @@ interface UserMenuProps {
 export function UserMenu({ user, onOpenSettings, onSignOut }: UserMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const firstActionRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+
+  const dismissMenu = useCallback(() => {
+    setIsOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    activeUserMenuDismiss = dismissMenu;
+    const frame = window.requestAnimationFrame(() => firstActionRef.current?.focus({ preventScroll: true }));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (activeUserMenuDismiss === dismissMenu) activeUserMenuDismiss = null;
+    };
+  }, [dismissMenu, isOpen]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
@@ -32,21 +63,31 @@ export function UserMenu({ user, onOpenSettings, onSignOut }: UserMenuProps) {
   return (
     <div className="relative" ref={menuRef}>
       <button 
-        onClick={() => setIsOpen(!isOpen)}
+        ref={triggerRef}
+        type="button"
+        aria-label="Open account menu"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? menuId : undefined}
+        onClick={() => isOpen ? dismissMenu() : setIsOpen(true)}
         className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-300 dark:hover:border-slate-700 flex items-center justify-center text-orange-500 font-bold uppercase transition-colors"
       >
         {initial}
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+        <div id={menuId} role="menu" className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-200">
           <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800/60">
             <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{user.displayName || "User"}</p>
             <p className="text-xs text-slate-600 dark:text-slate-400 truncate">{user.email}</p>
           </div>
           <div className="p-1.5">
             <button
+              ref={firstActionRef}
+              type="button"
+              role="menuitem"
               onClick={() => {
+                triggerRef.current?.focus({ preventScroll: true });
                 setIsOpen(false);
                 onOpenSettings();
               }}
@@ -56,6 +97,8 @@ export function UserMenu({ user, onOpenSettings, onSignOut }: UserMenuProps) {
               Settings
             </button>
             <button
+              type="button"
+              role="menuitem"
               onClick={() => {
                 setIsOpen(false);
                 onSignOut();

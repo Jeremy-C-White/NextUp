@@ -1,6 +1,8 @@
-# NextUp
+# NextUp Phone
 
-A modern streaming dashboard that aggregates your library and resolves video streams via AIOStreams.
+The phone edition of NextUp: the complete v1.0.59 tracking, discovery, recommendation, resume, and autoplay experience with an MP4-first mobile playback path.
+
+The interface is tuned for iPhone portrait and landscape layouts, including safe areas, touch-sized controls, responsive credits/next-episode cards, native captions, and Safari's explicit-tap audio requirement.
 
 ## Prerequisites
 
@@ -40,7 +42,6 @@ npm run start
 
 ## Deployment
 
-The application is structured to be deployed as a static Single Page Application (SPA).
-The `server.ts` file acts as a simple static file server for local containerized deployment but does not proxy external API requests. 
+The app can run as a static Single Page Application (SPA) or from its Node server. On static hosts such as GitHub Pages, stream-provider requests use the provider's CORS endpoint directly. The Node server provides a same-origin fallback proxy when hosted on a server.
 
 For GitHub Pages, ensure you build the static assets (`npm run build`) and configure router fallbacks for a client-side single page app. A Node server is not strictly required if you host the static files securely.

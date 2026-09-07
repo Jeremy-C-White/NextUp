@@ -3,23 +3,15 @@ import { Episode, UserEpisode } from "../types";
 type AnyEpisode = Episode | UserEpisode;
 
 // Parses "YYYY-MM-DD" into a local date at midnight, avoiding timezone offset issues
-export function parseLocalDateOnly(dateString: string): Date | null {
-  if (!dateString || typeof dateString !== 'string') return null;
-  try {
-    const parts = dateString.split('-');
-    if (parts.length !== 3) return null;
-    const [year, month, day] = parts;
-    return new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
-  } catch (err) {
-    return null;
-  }
+export function parseLocalDateOnly(dateString: string): Date {
+  const [year, month, day] = dateString.split('-');
+  return new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
 }
 
 // Returns the release Date for an episode, preferring exact airstamp if available
 export function getEpisodeReleaseTime(episode: AnyEpisode): Date | null {
   if (episode.airstamp) {
-    const d = new Date(episode.airstamp);
-    if (!isNaN(d.getTime())) return d;
+    return new Date(episode.airstamp);
   }
   if (episode.airdate) {
     return parseLocalDateOnly(episode.airdate);

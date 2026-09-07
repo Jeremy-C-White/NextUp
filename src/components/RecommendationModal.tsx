@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef } from "react";
 import { X, PlayCircle, Sparkles, Dices, Info, Tv, Calendar } from "lucide-react";
 import { UserShow, UserEpisode } from "../types";
 import { ExpandableText } from "./ExpandableText";
 import { format } from "date-fns";
+import { optimizeArtworkUrl } from "../lib/images";
 
 interface Props {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface Props {
   show: UserShow;
   episode: UserEpisode;
   progress: number;
+  reason: string;
   onPlayEpisode: (showId: string, imdbId: string | undefined, episode: UserEpisode) => void;
   onViewDetails: (show: UserShow) => void;
   onReroll: () => void;
@@ -21,10 +23,43 @@ export function RecommendationModal({
   show,
   episode,
   progress,
+  reason,
   onPlayEpisode,
   onViewDetails,
   onReroll,
 }: Props) {
+  const playButtonRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+
+  const dismiss = useCallback(() => {
+    const opener = openerRef.current;
+    onClose();
+    window.requestAnimationFrame(() => {
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
+    });
+  }, [onClose]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => playButtonRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [isOpen]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      dismiss();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [dismiss, isOpen]);
+
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = "hidden";
@@ -39,45 +74,51 @@ export function RecommendationModal({
   const isResolving = false;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-6 overflow-hidden sm:overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+    >
       {/* Blurred background overlay */}
       <div 
         className="fixed inset-0 bg-slate-950/85 backdrop-blur-xl transition-opacity animate-fade-in"
-        onClick={onClose}
+        onClick={dismiss}
       />
 
       {/* Floating recommendation card */}
-      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl z-10 transition-transform animate-scale-up flex flex-col my-auto">
+      <div className="relative w-full max-w-xl h-dvh sm:h-auto max-h-dvh sm:max-h-[calc(100dvh-3rem)] bg-slate-900 border border-slate-800 rounded-none sm:rounded-3xl overflow-y-auto overscroll-contain shadow-2xl z-10 transition-transform animate-scale-up flex flex-col my-auto">
         
         {/* Backdrop Graphic Header with gradient fade */}
-        <div className="relative h-64 sm:h-72 w-full bg-slate-950 shrink-0">
+        <div className="relative h-52 sm:h-72 w-full bg-slate-950 shrink-0">
           {show.backdropUrl || show.imageUrl ? (
             <img 
               decoding="async"
               referrerPolicy="no-referrer"
               loading="lazy"
-              src={show.backdropUrl || show.imageUrl}
+              fetchPriority="low"
+              src={optimizeArtworkUrl(show.backdropUrl || show.imageUrl)}
               alt=""
               className="w-full h-full object-cover object-top opacity-80"
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center bg-slate-950 text-slate-800 text-6xl font-bold">
-              {(show.name || "?")[0]}
+              {show.name[0]}
             </div>
           )}
           {/* Shading/gradient transition down into content card */}
           <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
           
           {/* Sparkles / Magic badge */}
-          <div className="absolute top-4 left-4 flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 rounded-full text-xs font-semibold uppercase tracking-wider backdrop-blur-md">
+          <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-[calc(0.75rem+env(safe-area-inset-left))] sm:top-4 sm:left-4 flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 rounded-full text-xs font-semibold uppercase tracking-wider backdrop-blur-md">
             <Sparkles className="w-3.5 h-3.5 animate-pulse text-indigo-400" />
             <span>Tonight's Pick</span>
           </div>
 
           {/* Close button */}
           <button 
-            onClick={onClose}
-            className="absolute top-4 right-4 p-2.5 bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800/50 rounded-full text-slate-400 hover:text-white transition-colors backdrop-blur-md cursor-pointer touch-manipulation"
+            onClick={dismiss}
+            className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] right-[calc(0.75rem+env(safe-area-inset-right))] sm:top-4 sm:right-4 min-h-11 min-w-11 p-2.5 bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800/50 rounded-full text-slate-400 hover:text-white transition-colors backdrop-blur-md cursor-pointer touch-manipulation"
             aria-label="Dismiss recommendation"
           >
             <X className="w-4 h-4" />
@@ -95,16 +136,19 @@ export function RecommendationModal({
                 </span>
               )}
             </div>
-            <h2 className="text-4xl md:text-5xl font-display font-black text-white tracking-tight leading-tight drop-shadow-md">
+            <h2 id={titleId} className="text-3xl sm:text-4xl md:text-5xl font-display font-black text-white tracking-tight leading-tight drop-shadow-md line-clamp-2">
               {show.name}
             </h2>
           </div>
         </div>
 
         {/* Card Content body */}
-        <div className="p-6 flex-1 flex flex-col justify-between">
+        <div className="px-4 sm:px-6 pt-5 sm:pt-6 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6 flex-1 flex flex-col justify-between">
           <div className="mb-6">
             {/* Episode Title & Info */}
+            <div className="mb-4 rounded-xl border border-indigo-400/20 bg-indigo-500/10 px-4 py-3 text-sm font-semibold text-indigo-100">
+              <span className="text-indigo-300 font-bold">Why this pick:</span> {reason}
+            </div>
             <div className="flex flex-wrap items-baseline gap-2 mb-2">
               <span className="text-lg font-bold text-slate-200">
                 {show.isMovie ? "Feature Film" : `S${episode.season} E${episode.number}`}
@@ -152,6 +196,8 @@ export function RecommendationModal({
           <div className="flex flex-col gap-3">
             {/* Primary: Play Episode */}
             <button
+              ref={playButtonRef}
+              data-tv-default-focus="true"
               onClick={() => onPlayEpisode(show.id, show.imdbId, episode)}
               disabled={isResolving}
               className="w-full py-4 bg-orange-500 hover:bg-orange-400 disabled:bg-orange-500/50 text-orange-950 rounded-2xl font-bold text-base transition-all flex items-center justify-center gap-2.5 active:scale-98 shadow-xl shadow-orange-500/10 cursor-pointer touch-manipulation disabled:cursor-not-allowed"

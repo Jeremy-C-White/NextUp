@@ -1,5 +1,18 @@
-import { useState } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import { Plus, Calendar, ExternalLink } from "lucide-react";
+import { isTvBackKey } from "../lib/webos";
+
+let activeCalendarDismiss: (() => void) | null = null;
+
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", (event) => {
+    if (!activeCalendarDismiss || (event.key !== "Escape" && !isTvBackKey(event))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    activeCalendarDismiss();
+  }, true);
+}
 
 interface AddToCalendarButtonProps {
   showName: string;
@@ -20,11 +33,29 @@ export function AddToCalendarButton({
 }: AddToCalendarButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const firstActionRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+
+  const dismissCalendar = useCallback(() => {
+    setIsOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    activeCalendarDismiss = dismissCalendar;
+    const frame = window.requestAnimationFrame(() => firstActionRef.current?.focus({ preventScroll: true }));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (activeCalendarDismiss === dismissCalendar) activeCalendarDismiss = null;
+    };
+  }, [dismissCalendar, isOpen]);
 
   const handleAction = (e: React.MouseEvent, type: 'google' | 'ics') => {
     e.stopPropagation();
     e.preventDefault();
-    setIsOpen(false);
+    dismissCalendar();
 
     try {
       const startDate = new Date(airstamp);
@@ -81,11 +112,16 @@ export function AddToCalendarButton({
   return (
     <div className="relative inline-block text-left z-30">
       <button
+        ref={triggerRef}
         type="button"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? menuId : undefined}
         onClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
-          setIsOpen(!isOpen);
+          if (isOpen) dismissCalendar();
+          else setIsOpen(true);
         }}
         className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold uppercase tracking-wide transition-colors border border-slate-200/50 dark:border-slate-700/50 active:scale-95 touch-manipulation"
       >
@@ -100,10 +136,15 @@ export function AddToCalendarButton({
             onClick={(e) => {
               e.stopPropagation();
               e.preventDefault();
-              setIsOpen(false);
+              dismissCalendar();
             }} 
           />
           <div 
+            id={menuId}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Add ${showName} season ${season} episode ${number} to calendar`}
+            data-tv-transient-layer="calendar"
             className="absolute left-0 mt-2 w-48 rounded-xl bg-white dark:bg-slate-800 shadow-xl border border-slate-200 dark:border-slate-700 py-1.5 z-50 text-slate-800 dark:text-slate-200 text-xs font-semibold"
             onClick={(e) => {
               e.stopPropagation();
@@ -111,7 +152,9 @@ export function AddToCalendarButton({
             }}
           >
             <button
+              ref={firstActionRef}
               type="button"
+              data-tv-default-focus="true"
               onClick={(e) => handleAction(e, 'google')}
               className="w-full px-3.5 py-2 text-left hover:bg-orange-500/10 hover:text-orange-500 flex items-center gap-2 transition-colors"
             >

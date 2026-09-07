@@ -40,7 +40,7 @@ export interface Episode {
 }
 
 export interface UserShow {
-  id: string; // Firestore document ID (TVmaze ID as string)
+  id: string; // Exact Firestore document ID (the original source ID as a string)
   tvmazeId: number;
   name: string;
   imageUrl: string;
@@ -61,6 +61,7 @@ export interface UserShow {
   episodes?: UserEpisode[];
   lastRefreshed?: number;
   _tmdbId?: number;
+  thetvdbId?: number;
 }
 
 export interface UserEpisode {
@@ -86,8 +87,11 @@ export interface PlaybackCandidate {
   quality?: string;
   sizeBytes?: number;
   container?: string;
+  mediaContainer?: string;
   videoCodec?: string;
   audioCodec?: string;
+  audioLanguage?: "english" | "multi" | "unknown";
+  playbackSupport?: "native" | "probe" | "external";
   score: number;
   seeders?: number;
   readiness?: string;
@@ -110,7 +114,13 @@ export interface PlaybackRequest {
   imdbId?: string;
   _tmdbId?: number;
   tvmazeId?: number;
+  episodeId: string;
   season: number;
   number: number;
   episodeName: string;
+  imageUrl?: string;
+  backdropUrl?: string;
+  episodeImageUrl?: string;
+  summary?: string;
+  provider?: string;
 }

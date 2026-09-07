@@ -1,31 +1,41 @@
-import { useState, useEffect } from "react";
-import { X, CheckCircle2, PlayCircle, Trash2, ExternalLink } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { X, CheckCircle2, PlayCircle, Trash2, ExternalLink, Sparkles, ThumbsUp, Ban, Eye } from "lucide-react";
 import { UserShow, UserEpisode } from "../types";
 import { ExpandableText } from "./ExpandableText";
 import { AddToCalendarButton } from "./AddToCalendarButton";
-import { getTMDBIdFromIMDB, getWatchProviders, getTMDBExternalIds } from "../lib/tmdb";
+import { getTMDBIdFromIMDB, getWatchProviders, getTMDBExternalIds, getTMDBMovieDetails, TMDBMovieDetails } from "../lib/tmdb";
 import { resolveTVMazeShow, getEpisodes } from "../lib/tvmaze";
 import { getEpisodeReleaseTime, isEpisodeReleased, getReleasedEpisodes } from "../lib/episodes";
 import { getBestTorrentioStream } from "../lib/debrid";
 import { doc, setDoc } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { removeUndefined } from "../lib/library";
+import { formatPlaybackPosition } from "../lib/playbackProgress";
+import { optimizeArtworkUrl } from "../lib/images";
+import { firstPositiveNumber, formatRuntimeMinutes } from "../lib/mediaMetadata";
+import type { RecommendationFeedbackKind } from "../lib/recommendationPreferences";
+import { isTvBackKey } from "../lib/webos";
 
 interface Props {
   show: UserShow;
   episodes: UserEpisode[];
   isOpen: boolean;
   onClose: () => void;
-  onRemove: () => void;
+  onRemove: () => Promise<void> | void;
   onToggleWatched: (episodeId: string, watched: boolean) => void;
   onMarkThrough: (episodeIds: string[]) => void;
+  onSetProgress?: (lastWatchedEpisodeId: string | null) => void;
   inLibrary?: boolean;
   onAdd?: (caughtUp: boolean) => void;
   addingShowId?: number | null;
   onPlayEpisode?: (showId: string, imdbId: string | undefined, episode: UserEpisode) => void;
+  getResumePosition?: (showId: string, episodeId: string) => number | null;
+  recommendationReason?: string | null;
+  recommendationFeedback?: RecommendationFeedbackKind;
+  onRecommendationFeedback?: (kind: RecommendationFeedbackKind) => void;
 }
 
-export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onToggleWatched, onMarkThrough, inLibrary, onAdd, addingShowId, onPlayEpisode }: Props) {
+export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onToggleWatched, onMarkThrough, onSetProgress, inLibrary, onAdd, addingShowId, onPlayEpisode, getResumePosition, recommendationReason, recommendationFeedback, onRecommendationFeedback }: Props) {
   const [seasonFilter, setSeasonFilter] = useState<string>("all");
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedEpForStreams, setSelectedEpForStreams] = useState<UserEpisode | null>(null);
@@ -35,12 +45,62 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
   const [isCheckingImdb, setIsCheckingImdb] = useState(false);
   const [checkedImdb, setCheckedImdb] = useState(false);
   const [resolvedLocalImdb, setResolvedLocalImdb] = useState<string | null>(null);
+  const [movieDetails, setMovieDetails] = useState<TMDBMovieDetails | null>(null);
+  const [showRemoveConfirmation, setShowRemoveConfirmation] = useState(false);
+  const [isRemoving, setIsRemoving] = useState(false);
+  const [progressNotice, setProgressNotice] = useState<string | null>(null);
+  const cancelRemoveButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setResolvedLocalImdb(null);
+      setMovieDetails(null);
+      setShowRemoveConfirmation(false);
+      setIsRemoving(false);
+      setProgressNotice(null);
     }
   }, [isOpen, show.id]);
+
+  useEffect(() => {
+    if (!isOpen || !show.isMovie) {
+      setMovieDetails(null);
+      return;
+    }
+
+    const numericId = typeof show.id === "string" ? parseInt(show.id, 10) : show.id;
+    const tmdbId = show._tmdbId || (numericId < -1000000000 ? -numericId - 1000000000 : undefined);
+    if (!tmdbId) return;
+
+    let active = true;
+    getTMDBMovieDetails(tmdbId).then(details => {
+      if (!active) return;
+      setMovieDetails(details);
+      if (details.imdbId) setResolvedLocalImdb(current => current || details.imdbId || null);
+
+      if (inLibrary !== false && auth.currentUser) {
+        const showRef = doc(db, `users/${auth.currentUser.uid}/shows/${show.id}`);
+        void setDoc(showRef, removeUndefined({
+          runtime: details.runtime,
+          genres: details.genres.length > 0 ? details.genres : undefined,
+          vote_average: details.voteAverage,
+          rating: details.voteAverage ? { average: details.voteAverage } : undefined,
+          premiered: details.releaseDate,
+          status: details.status,
+          officialSite: details.homepage,
+          imdbId: details.imdbId,
+          _tmdbId: tmdbId
+        }), { merge: true }).catch(error => console.warn("Could not save movie details", error));
+      }
+    }).catch(error => console.warn("Could not load movie details", error));
+
+    return () => { active = false; };
+  }, [inLibrary, isOpen, show._tmdbId, show.id, show.isMovie]);
+
+  useEffect(() => {
+    if (!showRemoveConfirmation) return;
+    const frame = window.requestAnimationFrame(() => cancelRemoveButtonRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [showRemoveConfirmation]);
 
   useEffect(() => {
     if (isOpen) {
@@ -49,7 +109,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
       if (inLibrary !== false && episodes.length > 0) {
         const unwatched = getReleasedEpisodes(episodes).filter(e => !e.watched);
         if (unwatched.length > 0) {
-          setSeasonFilter(String(unwatched[0].season));
+          setSeasonFilter(unwatched[0].season.toString());
         } else {
           setSeasonFilter("all");
         }
@@ -177,8 +237,22 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
   const seasons = Array.from(new Set(displayEpisodes.map(e => Number(e.season)))).sort((a: any, b: any) => b - a);
   const filteredEpisodes = displayEpisodes.filter(e => {
     if (seasonFilter === "all") return true;
-    return String(e.season) === seasonFilter;
+    return e.season.toString() === seasonFilter;
   });
+  const releasedEpisodes = getReleasedEpisodes(displayEpisodes);
+  const releasedFilteredEpisodes = getReleasedEpisodes(filteredEpisodes);
+  const watchedReleasedCount = releasedEpisodes.filter(episode => episode.watched).length;
+  const progressPercentage = releasedEpisodes.length > 0
+    ? Math.round((watchedReleasedCount / releasedEpisodes.length) * 100)
+    : 0;
+  const nextUnwatchedEpisode = releasedEpisodes.find(episode => !episode.watched);
+
+  const displayRating = firstPositiveNumber(movieDetails?.voteAverage, show.rating?.average, show.vote_average);
+  const displayRuntime = firstPositiveNumber(movieDetails?.runtime, show.runtime);
+  const displayGenres = movieDetails?.genres.length ? movieDetails.genres : (show.genres || []);
+  const displayPremiered = movieDetails?.releaseDate || show.premiered;
+  const displayStatus = movieDetails?.status || (show.isMovie ? "Feature Film" : show.status);
+  const displayOfficialSite = movieDetails?.homepage || show.officialSite;
 
 
   const handleToggleWatched = (episodeId: string, currentWatched: boolean) => {
@@ -188,15 +262,36 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
   const handleMarkThrough = (episodeId: string) => {
     const episodeIndex = episodes.findIndex(e => e.id === episodeId);
     if (episodeIndex === -1) return;
-    const toMark = episodes.slice(0, episodeIndex + 1).filter(e => !e.watched).map(e => e.id);
+    const targetEpisode = episodes[episodeIndex];
+    const toMark = episodes
+      .slice(0, episodeIndex + 1)
+      .filter(e => isEpisodeReleased(e) && !e.watched)
+      .map(e => e.id);
     if (toMark.length > 0) {
       onMarkThrough(toMark);
+      setProgressNotice(`Progress saved through S${targetEpisode.season} E${targetEpisode.number}. Up Next will move to your following aired episode.`);
     }
   };
 
-  const handleRemove = () => {
-    if (window.confirm("Remove this series and its watch progress?")) {
-      onRemove();
+  const handleSetProgress = (episode: UserEpisode) => {
+    if (onSetProgress) onSetProgress(episode.id);
+    else handleMarkThrough(episode.id);
+    setProgressNotice(`Progress set through S${episode.season} E${episode.number}. The following aired episode is now Up Next.`);
+  };
+
+  const handleStartFromBeginning = () => {
+    onSetProgress?.(null);
+    setProgressNotice("Progress reset. Your first aired episode is now Up Next.");
+  };
+
+  const handleRemove = async () => {
+    setIsRemoving(true);
+    try {
+      await onRemove();
+    } catch {
+      // The parent keeps the details open and displays the connection error.
+    } finally {
+      setIsRemoving(false);
     }
   };
 
@@ -207,36 +302,47 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-8 md:pt-20 px-4 bg-slate-950/80 backdrop-blur-sm touch-manipulation overflow-y-auto" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[92dvh] md:max-h-[85dvh] overscroll-contain animate-in my-4 md:my-8" onClick={(e) => e.stopPropagation()}>
-        <div className="relative min-h-[14rem] md:min-h-[18rem] bg-slate-950 shrink-0 flex flex-col justify-end p-5 md:p-6 pt-14 md:pt-20">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-0 md:p-6 bg-slate-950/80 backdrop-blur-sm touch-manipulation overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      onKeyDownCapture={(event) => {
+        if (!showRemoveConfirmation || !isTvBackKey(event.nativeEvent)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setShowRemoveConfirmation(false);
+      }}
+    >
+      <div data-tv-library-manager="true" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-none md:rounded-3xl w-full max-w-[96rem] h-dvh md:h-[94dvh] max-h-dvh md:max-h-[94dvh] overflow-hidden shadow-2xl flex flex-col overscroll-contain animate-in" onClick={(e) => e.stopPropagation()}>
+        <div data-tv-show-hero="true" className="relative min-h-[11rem] md:min-h-[12rem] bg-slate-950 shrink-0 flex flex-col justify-end px-5 pb-5 md:p-6 pt-[calc(3.5rem+env(safe-area-inset-top))]">
           {show.imageUrl && (
-            <img decoding="async" referrerPolicy="no-referrer" loading="lazy" src={show.backdropUrl || show.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
+            <img decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={optimizeArtworkUrl(show.backdropUrl || show.imageUrl)} alt="" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/20 pointer-events-none" />
           
-          <button onClick={onClose} aria-label="Close" className="absolute top-4 right-4 w-11 h-11 flex items-center justify-center bg-slate-950/60 hover:bg-slate-800 rounded-full text-white backdrop-blur transition-colors z-50 touch-manipulation border border-white/10">
+          <button onClick={onClose} aria-label="Close" className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] right-[calc(0.75rem+env(safe-area-inset-right))] md:top-4 md:right-4 w-11 h-11 flex items-center justify-center bg-slate-950/60 hover:bg-slate-800 rounded-full text-white backdrop-blur transition-colors z-50 touch-manipulation border border-white/10">
             <X className="w-6 h-6" />
           </button>
 
           <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-end gap-4 sm:gap-6 text-center sm:text-left w-full">
             {show.imageUrl ? (
-              <img decoding="async" referrerPolicy="no-referrer" loading="lazy" src={show.imageUrl} alt="" className="w-20 h-30 sm:w-24 sm:h-36 rounded-xl shadow-lg object-cover border border-slate-800 shrink-0" />
+              <img decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={optimizeArtworkUrl(show.imageUrl, "poster")} alt="" className="w-20 h-30 sm:w-24 sm:h-36 rounded-xl shadow-lg object-cover border border-slate-800 shrink-0" />
             ) : (
-              <div className="w-20 h-30 sm:w-24 sm:h-36 bg-slate-800 rounded-xl flex items-center justify-center text-4xl font-bold text-white shrink-0">{(show.name || "?")[0]}</div>
+              <div className="w-20 h-30 sm:w-24 sm:h-36 bg-slate-800 rounded-xl flex items-center justify-center text-4xl font-bold text-white shrink-0">{show.name[0]}</div>
             )}
             <div className="flex-1 min-w-0 pb-1">
-              <span className="text-orange-400 font-bold text-xs uppercase tracking-wider">{show.status}</span>
+              <span className="text-orange-400 font-bold text-xs uppercase tracking-wider">{displayStatus}</span>
               <h2 className="text-2xl md:text-4xl font-display font-bold text-white leading-tight mt-1 mb-2 drop-shadow-md">{show.name}</h2>
               <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-3 gap-y-1 text-xs text-slate-300">
-                {show.premiered && <span>Released {new Date(show.premiered).getFullYear()}</span>}
-                {show.rating?.average && (
+                {displayPremiered && <span>Released {new Date(displayPremiered).getFullYear()}</span>}
+                {displayRating !== null && (
                   <span className="flex items-center gap-1 text-orange-400 font-semibold">
-                    ★ {show.rating.average}
+                    ★ {displayRating.toFixed(1)}
                   </span>
                 )}
-                {show.genres && show.genres.length > 0 && (
-                  <span className="text-slate-400">{show.genres.slice(0, 2).join(", ")}</span>
+                {displayGenres.length > 0 && (
+                  <span className="text-slate-400">{displayGenres.slice(0, 2).join(", ")}</span>
                 )}
               </div>
             </div>
@@ -244,7 +350,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
         </div>
 
         <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-y-auto md:overflow-hidden overscroll-contain">
-          <div className="w-full md:w-64 p-6 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 md:shrink-0 md:overflow-y-auto">
+          <div data-tv-details-sidebar="true" className="w-full md:w-72 p-6 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 md:shrink-0 md:overflow-y-auto">
             <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Details</h3>
             <div className="space-y-4">
               {show.summary && (
@@ -263,7 +369,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                     {providers.length > 0 ? (
                       providers.slice(0, 4).map(p => (
                         <div key={p.provider_id} className="flex items-center gap-2">
-                          <img src={`https://image.tmdb.org/t/p/w45${p.logo_path}`} alt={p.provider_name} className="w-5 h-5 rounded" />
+                          <img decoding="async" loading="lazy" fetchPriority="low" src={`https://image.tmdb.org/t/p/w45${p.logo_path}`} alt={p.provider_name} className="w-5 h-5 rounded" />
                           <span className="text-slate-700 dark:text-slate-300 text-base">{p.provider_name}</span>
                         </div>
                       ))
@@ -274,40 +380,109 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                 </div>
               )}
               
-              {show.genres && show.genres.length > 0 && (
+              {displayGenres.length > 0 && (
                 <div>
                   <span className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase">Genres</span>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {show.genres.map(g => (
+                    {displayGenres.map(g => (
                       <span key={g} className="px-2 py-0.5 bg-slate-200 dark:bg-slate-800 rounded text-slate-700 dark:text-slate-300 text-[11px] uppercase font-bold tracking-wider">{g}</span>
                     ))}
                   </div>
                 </div>
               )}
               
-              {show.runtime ? (
+              {displayRuntime !== null ? (
                 <div>
                   <span className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase">Runtime</span>
-                  <p className="text-slate-700 dark:text-slate-300 text-base">{show.runtime} mins</p>
+                  <p className="text-slate-700 dark:text-slate-300 text-base">{formatRuntimeMinutes(displayRuntime)}</p>
                 </div>
               ) : null}
+
+              {recommendationReason && (
+                <div className="rounded-xl border border-orange-500/25 bg-orange-500/10 p-3">
+                  <span className="text-orange-400 text-xs font-bold uppercase flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" /> Why this pick
+                  </span>
+                  <p className="text-slate-800 dark:text-slate-100 text-sm font-semibold leading-snug mt-1.5">{recommendationReason}</p>
+                </div>
+              )}
+
+              {onRecommendationFeedback && (
+                <div>
+                  <span className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase">Tune recommendations</span>
+                  <div className="flex flex-col gap-2 mt-2">
+                    <button
+                      type="button"
+                      aria-pressed={recommendationFeedback === "more-like-this"}
+                      onClick={() => onRecommendationFeedback("more-like-this")}
+                      className={`w-full px-3 py-2.5 rounded-xl border text-left text-sm font-bold flex items-center gap-2 ${recommendationFeedback === "more-like-this" ? "bg-orange-500 border-orange-500 text-orange-950" : "bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"}`}
+                    >
+                      <ThumbsUp className="w-4 h-4" /> More like this
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={recommendationFeedback === "not-for-me"}
+                      onClick={() => onRecommendationFeedback("not-for-me")}
+                      className={`w-full px-3 py-2.5 rounded-xl border text-left text-sm font-bold flex items-center gap-2 ${recommendationFeedback === "not-for-me" ? "bg-slate-600 border-slate-500 text-white" : "bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"}`}
+                    >
+                      <Ban className="w-4 h-4" /> Not for me
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={recommendationFeedback === "already-watched"}
+                      onClick={() => onRecommendationFeedback("already-watched")}
+                      className={`w-full px-3 py-2.5 rounded-xl border text-left text-sm font-bold flex items-center gap-2 ${recommendationFeedback === "already-watched" ? "bg-emerald-500 border-emerald-500 text-emerald-950" : "bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"}`}
+                    >
+                      <Eye className="w-4 h-4" /> Already watched
+                    </button>
+                  </div>
+                </div>
+              )}
               
-              {show.officialSite && (
+              {displayOfficialSite && (
                 <div>
                   <span className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase">Links</span>
-                  <a href={show.officialSite} target="_blank" rel="noopener noreferrer" className="text-orange-400 hover:text-orange-300 text-base flex items-center gap-1 mt-1">
+                  <a href={displayOfficialSite} target="_blank" rel="noopener noreferrer" className="text-orange-400 hover:text-orange-300 text-base flex items-center gap-1 mt-1">
                     Official Site <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
               )}
               {inLibrary !== false ? (
-                <button 
-                  onClick={handleRemove}
-                  className="w-full py-2 px-4 border border-red-500/30 text-red-400 rounded-xl hover:bg-red-500/10 transition-colors text-base font-bold flex items-center justify-center gap-2 mt-8"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  {(show.isMovie) ? "Remove Movie" : "Remove Series"}
-                </button>
+                showRemoveConfirmation ? (
+                  <div className="mt-8 rounded-xl border border-red-500/30 bg-red-500/10 p-3" role="alertdialog" aria-modal="true" aria-label={`Remove ${show.name}`}>
+                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-3">
+                      Remove this {show.isMovie ? "movie" : "series"} and its watch progress?
+                    </p>
+                    <div data-tv-row="true" className="flex gap-2">
+                      <button
+                        ref={cancelRemoveButtonRef}
+                        type="button"
+                        onClick={() => setShowRemoveConfirmation(false)}
+                        disabled={isRemoving}
+                        className="flex-1 py-2 px-3 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg font-bold disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRemove}
+                        disabled={isRemoving}
+                        className="flex-1 py-2 px-3 bg-red-500 text-white rounded-lg font-bold disabled:opacity-60"
+                      >
+                        {isRemoving ? "Removing..." : "Yes, Remove"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowRemoveConfirmation(true)}
+                    className="w-full py-2 px-4 border border-red-500/30 text-red-400 rounded-xl hover:bg-red-500/10 transition-colors text-base font-bold flex items-center justify-center gap-2 mt-8"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    {(show.isMovie) ? "Remove Movie" : "Remove Series"}
+                  </button>
+                )
               ) : (
                 <div className="flex flex-col gap-2 mt-8">
                   {!(show.isMovie) && (
@@ -331,33 +506,104 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
             </div>
           </div>
 
-          <div className="flex-1 flex flex-col md:min-h-0 bg-white/50 dark:bg-slate-900/50">
-            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                {(show.isMovie) ? "Stream Movie" : "Episodes"}
-              </h3>
-              {!(show.isMovie) && (
-                <div className="flex items-center gap-3">
-                  {inLibrary !== false && seasonFilter !== "all" && getReleasedEpisodes(filteredEpisodes).some(e => !e.watched) && (
-                    <button onClick={() => onMarkThrough(
-                      getReleasedEpisodes(filteredEpisodes).filter(e => !e.watched).map(e => e.id)
-                    )} className="text-xs font-bold text-orange-400 bg-orange-500/10 border border-orange-500/20 px-3 py-2 rounded-lg active:scale-95 touch-manipulation">
-                      Mark Season Watched
+          <div data-tv-progress-panel="true" className="flex-1 flex flex-col min-w-0 md:min-h-0 bg-white/50 dark:bg-slate-900/50">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-2xl font-display font-bold text-slate-900 dark:text-white">
+                    {show.isMovie ? "Stream Movie" : inLibrary !== false ? "Set your progress" : "Episodes"}
+                  </h3>
+                  {!show.isMovie && (
+                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-1 max-w-3xl">
+                      {inLibrary !== false
+                        ? "Choose the last episode you watched, or select a season and use the caught-up shortcut. Every earlier episode is included automatically, and the following aired episode becomes Up Next."
+                        : "Browse the episode list before adding this series to your library."}
+                    </p>
+                  )}
+                </div>
+                {!show.isMovie && inLibrary !== false && (
+                  <div className="shrink-0 flex items-center gap-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-950/60 px-4 py-3">
+                    <div>
+                      <div className="text-2xl font-display font-bold text-orange-400">{progressPercentage}%</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{watchedReleasedCount} of {releasedEpisodes.length} aired</div>
+                    </div>
+                    <div className="h-10 w-px bg-slate-300 dark:bg-slate-700" />
+                    <div>
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Next Up</div>
+                      <div className="text-base font-bold text-slate-900 dark:text-white">
+                        {nextUnwatchedEpisode ? `S${nextUnwatchedEpisode.season} E${nextUnwatchedEpisode.number}` : "Caught up"}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {!show.isMovie && inLibrary !== false && releasedEpisodes.length > 0 && (
+                <div className="w-full h-2.5 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-800" aria-label={`${progressPercentage}% watched`}>
+                  <div className="h-full rounded-full bg-orange-500" style={{ width: `${progressPercentage}%` }} />
+                </div>
+              )}
+
+              {!show.isMovie && (
+                <div data-tv-row="true" className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
+                  {[{ value: "all", label: "All seasons" }, ...seasons.map(season => ({ value: String(season), label: `Season ${season}` }))].map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-pressed={seasonFilter === option.value}
+                      onClick={() => setSeasonFilter(option.value)}
+                      className={`shrink-0 rounded-xl px-5 py-2.5 text-base font-bold border transition-colors ${
+                        seasonFilter === option.value
+                          ? "bg-orange-500 border-orange-500 text-orange-950"
+                          : "bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                  {inLibrary !== false && watchedReleasedCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleStartFromBeginning}
+                      className="shrink-0 rounded-xl px-5 py-2.5 text-base font-bold border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-200"
+                    >
+                      Reset series progress
                     </button>
                   )}
-                  <select 
-                    value={seasonFilter} 
-                    onChange={(e) => setSeasonFilter(e.target.value)}
-                    className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 text-base rounded-lg px-3 py-1.5 focus:outline-none focus:border-orange-500"
-                  >
-                    <option value="all">All Seasons</option>
-                    {seasons.map(s => <option key={s} value={s}>Season {s}</option>)}
-                  </select>
+                  {inLibrary !== false && nextUnwatchedEpisode && releasedEpisodes.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetProgress(releasedEpisodes[releasedEpisodes.length - 1])}
+                      className="shrink-0 rounded-xl px-5 py-2.5 text-base font-bold border border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                    >
+                      I’m caught up
+                    </button>
+                  )}
+                  {inLibrary !== false && seasonFilter !== "all" && releasedFilteredEpisodes.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleSetProgress(releasedFilteredEpisodes[releasedFilteredEpisodes.length - 1]);
+                        setProgressNotice(`Caught up through Season ${seasonFilter}. Every earlier aired episode is marked watched, and later episodes remain unwatched.`);
+                      }}
+                      aria-label={`Set progress as caught up through Season ${seasonFilter}, including every earlier season`}
+                      className="shrink-0 rounded-xl px-5 py-2.5 border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 flex flex-col items-start leading-tight"
+                    >
+                      <span className="text-base font-bold">Caught up through Season {seasonFilter}</span>
+                      <span className="text-xs font-medium opacity-80 mt-1">Includes every earlier season</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {progressNotice && (
+                <div role="status" className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-600 dark:text-emerald-300">
+                  {progressNotice}
                 </div>
               )}
             </div>
             
-            <div className="md:flex-1 md:overflow-y-auto overscroll-contain p-4 space-y-2">
+            <div data-tv-episode-list="true" className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3">
               {epsLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="flex gap-4 p-3 rounded-xl border bg-slate-100/80 dark:bg-slate-800/30 border-slate-200 dark:border-slate-700/50 animate-pulse">
@@ -378,7 +624,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                   <div className="flex-1 text-center md:text-left">
                     <h4 className="text-slate-900 dark:text-white font-display font-bold text-xl mb-1">{show.name}</h4>
                     <p className="text-slate-500 dark:text-slate-400 text-sm">
-                      {show.premiered ? `Released ${new Date(show.premiered).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}` : "Feature Film"}
+                      {displayPremiered ? `Released ${new Date(displayPremiered).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}` : "Feature Film"}
                     </p>
                     {show.summary && (
                       <p className="text-slate-600 dark:text-slate-400 text-sm mt-3 leading-relaxed">
@@ -389,10 +635,10 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                   <div className="flex flex-col sm:flex-row md:flex-col gap-3 shrink-0 w-full sm:w-auto md:w-48">
                     {(() => {
                       const finalImdbId = resolvedLocalImdb || show.imdbId;
-                      const isMovieReleased = show.premiered ? new Date(show.premiered) <= new Date() : true;
+                      const isMovieReleased = displayPremiered ? new Date(displayPremiered) <= new Date() : true;
                       
                       if (!isMovieReleased) {
-                        const formattedDate = show.premiered ? new Date(show.premiered).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+                        const formattedDate = displayPremiered ? new Date(displayPremiered).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
                         return (
                           <button
                             disabled
@@ -420,9 +666,11 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                       }
 
                       if (finalImdbId && finalImdbId !== "none") {
+                        const movieEpisode = filteredEpisodes[0] || { id: "movie_" + show.id, season: 1, number: 1, name: show.name } as any;
+                        const movieResumePosition = getResumePosition?.(show.id, movieEpisode.id) ?? null;
                         return (
                           <button
-                            onClick={() => handlePlayEpisode(filteredEpisodes[0] || { id: "movie_" + show.id, season: 1, number: 1, name: show.name } as any)}
+                            onClick={() => handlePlayEpisode(movieEpisode)}
                             
                             className="w-full py-3.5 px-6 rounded-xl bg-orange-500 text-orange-950 hover:bg-orange-400 active:scale-95 transition-all flex items-center justify-center gap-2 text-base font-bold shadow-lg shadow-orange-500/20 disabled:opacity-50 touch-manipulation"
                           >
@@ -431,7 +679,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                             ) : (
                               <PlayCircle className="w-5 h-5" />
                             )}
-                            <span>"Play Movie"</span>
+                            <span>{movieResumePosition !== null ? `Resume ${formatPlaybackPosition(movieResumePosition)}` : "Play Movie"}</span>
                           </button>
                         );
                       } else {
@@ -462,39 +710,56 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                     )}
                   </div>
                 </div>
-              ) : filteredEpisodes.map((ep, index) => {
+              ) : filteredEpisodes.map(ep => {
                 const released = isEpisodeReleased(ep);
-                
+                const isNextUp = nextUnwatchedEpisode?.id === ep.id;
+                const resumePosition = getResumePosition?.(show.id, ep.id) ?? null;
+
                 return (
-                  <div key={ep.id} className={`flex flex-wrap sm:flex-nowrap items-center gap-4 p-3 rounded-xl border ${ep.watched ? 'bg-slate-50 dark:bg-slate-950/50 border-slate-200 dark:border-slate-800/50 opacity-60' : 'bg-slate-100/80 dark:bg-slate-800/30 border-slate-200 dark:border-slate-700/50'}`}>
-                    <div className="w-12 h-12 bg-slate-200 dark:bg-slate-800 rounded-lg flex items-center justify-center font-mono text-xs font-bold text-orange-400 shrink-0">
-                      {show.isMovie ? "MOVIE" : `S${ep.season} E${ep.number}`}
+                  <div
+                    key={ep.id}
+                    data-tv-episode-row="true"
+                    className={`flex flex-wrap lg:flex-nowrap items-center gap-4 p-4 rounded-2xl border ${
+                      isNextUp
+                        ? "bg-orange-500/10 border-orange-500/50"
+                        : ep.watched
+                          ? "bg-emerald-500/5 border-emerald-500/20"
+                          : "bg-slate-100/80 dark:bg-slate-800/30 border-slate-200 dark:border-slate-700/50"
+                    }`}
+                  >
+                    <div className={`w-16 h-16 rounded-xl flex items-center justify-center font-mono text-sm font-extrabold shrink-0 ${
+                      ep.watched ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-200 dark:bg-slate-800 text-orange-400"
+                    }`}>
+                      {`S${ep.season} E${ep.number}`}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="text-slate-900 dark:text-white font-bold truncate text-base">{ep.name}</h4>
-                      <p className="text-slate-500 dark:text-slate-400 text-xs truncate">
-                        {getEpisodeReleaseTime(ep) ? getEpisodeReleaseTime(ep)!.toLocaleDateString() : "TBA"}
+                    <div className="flex-1 min-w-[240px]">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <h4 className="text-slate-900 dark:text-white font-bold text-lg">{ep.name}</h4>
+                        {isNextUp && <span className="rounded-md bg-orange-500 px-2 py-1 text-[11px] font-extrabold uppercase tracking-wider text-orange-950">Next Up</span>}
+                        {ep.watched && <span className="rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-500">Watched</span>}
+                        {!released && <span className="rounded-md bg-slate-500/15 px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Upcoming</span>}
+                      </div>
+                      <p className="text-slate-500 dark:text-slate-400 text-sm">
+                        {getEpisodeReleaseTime(ep) ? getEpisodeReleaseTime(ep)!.toLocaleDateString() : "Air date TBA"}
+                        {ep.runtime ? ` · ${ep.runtime} min` : ""}
                       </p>
                       {ep.summary && (
-                        <ExpandableText 
-                          text={ep.summary} 
-                          className="text-slate-600 dark:text-slate-400 text-xs mt-2 leading-snug break-words whitespace-normal" 
-                          limit={100}
+                        <ExpandableText
+                          text={ep.summary}
+                          className="text-slate-600 dark:text-slate-400 text-sm mt-2 leading-snug break-words whitespace-normal"
+                          limit={150}
                         />
                       )}
                     </div>
                     {released ? (
-                      <div className="flex items-center gap-2 shrink-0 w-full justify-end sm:w-auto mt-3 sm:mt-0">
+                      <div className="flex flex-wrap items-center gap-2 shrink-0 w-full justify-end lg:w-auto">
                         {(() => {
                           const finalImdbId = resolvedLocalImdb || show.imdbId;
 
                           if (isCheckingImdb || !checkedImdb) {
                             return (
-                              <button
-                                disabled
-                                className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-850 text-slate-400 dark:text-slate-500 flex items-center gap-1.5 text-xs font-bold animate-pulse"
-                              >
-                                <div className="w-3.5 h-3.5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+                              <button disabled className="px-4 py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center gap-2 text-sm font-bold animate-pulse">
+                                <div className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
                                 <span>Checking...</span>
                               </button>
                             );
@@ -504,51 +769,42 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                             return (
                               <button
                                 onClick={() => handlePlayEpisode(ep)}
-                                
-                                className="p-2.5 rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 active:scale-95 touch-manipulation flex items-center gap-1.5 text-xs font-bold disabled:opacity-50"
-                                title="Stream"
+                                data-tv-default-focus={isNextUp ? "true" : undefined}
+                                className="px-5 py-3 rounded-xl border border-orange-500 bg-orange-500 text-orange-950 active:scale-95 touch-manipulation flex items-center gap-2 text-sm font-extrabold"
+                                title={resumePosition !== null ? "Resume episode" : "Play episode"}
                               >
-                                {(false) ? (
-                                  <div className="w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
-                                ) : (
-                                  <PlayCircle className="w-4 h-4" />
-                                )}
-                                <span>"Play"</span>
-                              </button>
-                            );
-                          } else {
-                            return (
-                              <button
-                                disabled
-                                className="p-2.5 rounded-lg bg-slate-200/50 dark:bg-slate-900 text-slate-400 dark:text-slate-600 flex items-center gap-1.5 text-xs font-semibold border border-slate-200 dark:border-slate-800"
-                                title="No Stream Available"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                                <span>No Stream</span>
+                                <PlayCircle className="w-5 h-5" />
+                                <span>{resumePosition !== null ? `Resume ${formatPlaybackPosition(resumePosition)}` : "Play"}</span>
                               </button>
                             );
                           }
+
+                          return (
+                            <button disabled className="px-4 py-3 rounded-xl bg-slate-200/50 dark:bg-slate-900 text-slate-400 dark:text-slate-600 flex items-center gap-2 text-sm font-semibold border border-slate-200 dark:border-slate-800">
+                              <X className="w-4 h-4" />
+                              <span>No Stream</span>
+                            </button>
+                          );
                         })()}
-                        {inLibrary !== false && !ep.watched && (
-                          <button 
-                            onClick={() => handleMarkThrough(ep.id)}
-                            className="text-[11px] uppercase font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white px-3 py-2 bg-slate-200 dark:bg-slate-800 rounded-lg ml-2"
-                          >
-                            Through Here
-                          </button>
-                        )}
                         {inLibrary !== false && (
-                          <button 
-                            onClick={() => handleToggleWatched(ep.id, ep.watched)}
-                            className={`p-2.5 rounded-xl transition-colors ${ep.watched ? 'text-green-500 bg-green-500/10' : 'text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 active:scale-95 touch-manipulation'}`}
+                          <button
+                            type="button"
+                            onClick={() => handleSetProgress(ep)}
+                            aria-label={`Set ${show.name} progress through season ${ep.season}, episode ${ep.number}`}
+                            className={`px-5 py-3 rounded-xl border font-bold text-sm flex items-center gap-2 active:scale-95 touch-manipulation ${
+                              isNextUp
+                                ? "bg-slate-200 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                                : "bg-slate-100 dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                            }`}
                           >
                             <CheckCircle2 className="w-5 h-5" />
+                            <span>Set as last watched</span>
                           </button>
                         )}
                       </div>
                     ) : getEpisodeReleaseTime(ep) ? (
-                      <div className="flex items-center gap-2 shrink-0 w-full justify-end sm:w-auto mt-3 sm:mt-0">
-                        <AddToCalendarButton 
+                      <div className="flex items-center gap-2 shrink-0 w-full justify-end lg:w-auto">
+                        <AddToCalendarButton
                           showName={show.name}
                           season={ep.season}
                           number={ep.number}

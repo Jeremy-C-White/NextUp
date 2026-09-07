@@ -70,9 +70,9 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[calc(1rem+env(safe-area-inset-top))] md:pt-[calc(6rem+env(safe-area-inset-top))] p-4 bg-slate-950/80 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85dvh] overscroll-contain animate-in" onClick={(e) => e.stopPropagation()}>
-        <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-white/50 dark:bg-slate-900/50 backdrop-blur">
+    <div data-tv-modal-overlay="search" className="fixed inset-0 z-50 flex items-start justify-center p-0 md:p-4 md:pt-[calc(6rem+env(safe-area-inset-top))] bg-slate-950/80 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={onClose}>
+      <div data-tv-modal-surface="search" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-none md:rounded-3xl w-full max-w-2xl h-dvh md:h-auto overflow-hidden shadow-2xl flex flex-col max-h-dvh md:max-h-[85dvh] overscroll-contain animate-in" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 sm:px-6 pb-4 pt-[calc(1rem+env(safe-area-inset-top))] md:p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-white/50 dark:bg-slate-900/50 backdrop-blur">
           <div>
             <p className="text-orange-500 text-xs font-bold tracking-wider uppercase mb-1">Add to your library</p>
             <h2 className="text-2xl font-display font-bold text-slate-900 dark:text-white">Search movies & shows</h2>
@@ -82,7 +82,7 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
           </button>
         </div>
         
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <div className="relative">
             <Search className="absolute left-4 top-4 w-5 h-5 text-slate-500 dark:text-slate-400" />
             <input
@@ -94,10 +94,10 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
               className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl py-4 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:border-orange-500 transition-colors text-base"
             />
           </div>
-          <p className="text-slate-500 dark:text-slate-400 text-xs mt-3 ml-1">Check the year and network so you save the right version.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-xs mt-3 ml-1">TV series are unrestricted. Movies appear after their confirmed US digital release.</p>
         </div>
 
-        <div className="flex-1 overflow-y-auto overscroll-contain px-6 pb-6">
+        <div data-tv-search-results="true" className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-6 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6">
           {error && <div className="text-center text-red-500 py-8 font-medium">{error}</div>}
           {!loading && !error && query.trim().length > 2 && results.length === 0 && (
             <div className="text-center text-slate-600 dark:text-slate-400 py-8">No results found for "{query.trim()}"</div>
@@ -114,12 +114,12 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
     return false;
   });
               return (
-                <div key={show.id} className="flex gap-4 p-3 rounded-2xl bg-slate-100/80 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800/50 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
+                <div key={show.id} data-tv-search-result="true" className="flex gap-4 p-3 rounded-2xl bg-slate-100/80 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800/50 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
                   {show.image?.medium ? (
-                    <img decoding="async" referrerPolicy="no-referrer" loading="lazy" src={show.image.medium} alt={show.name} className="w-16 h-24 object-cover rounded-xl bg-slate-200 dark:bg-slate-800" />
+                    <img data-tv-search-poster="true" decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={show.image.medium} alt={show.name} className="w-16 h-24 object-cover rounded-xl bg-slate-200 dark:bg-slate-800" />
                   ) : (
-                    <div className="w-16 h-24 bg-slate-200 dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 font-bold text-xl">
-                      {(show.name || "?")[0]}
+                    <div data-tv-search-poster="true" className="w-16 h-24 bg-slate-200 dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 font-bold text-xl">
+                      {show.name[0]}
                     </div>
                   )}
                   <div className="flex-1 min-w-0 py-1">

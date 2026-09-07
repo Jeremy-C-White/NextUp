@@ -13,8 +13,11 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'prompt',
         manifest: {
-          name: 'NextUp',
-          short_name: 'NextUp',
+          name: 'NextUp Phone',
+          short_name: 'Phone',
+          description: 'NextUp v1.0.59 features with MP4-first phone playback.',
+          start_url: '.',
+          scope: '.',
           display: 'standalone',
           theme_color: '#020617',
           background_color: '#020617',

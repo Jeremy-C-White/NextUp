@@ -43,6 +43,7 @@ describe('AIOStreams Network layer', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     global.localStorage = originalLocalStorage;
     delete (global as any).window;
@@ -63,6 +64,39 @@ describe('AIOStreams Network layer', () => {
     expect(requestUrl).toContain(encodeURIComponent("https://my.aio.streams/stream/series/tt1234567:1:1.json"));
   });
 
+  test('filters foreign-only releases and puts explicit English audio first', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        streams: [
+          { name: '[RD+] AIO', title: 'Show.S01E01.Spanish.Audio.2160p.mp4', url: 'https://example.com/spanish.mp4' },
+          { name: '[RD+] AIO', title: 'Show.S01E01.English.1080p.mp4', url: 'https://example.com/english.mp4' },
+          { name: '[RD+] AIO', title: 'Show.S01E01.1080p.mp4', url: 'https://example.com/unknown.mp4' }
+        ]
+      })
+    });
+
+    const candidates = await getBestTorrentioStream('tt7654321', 1, 1, 'series', undefined, true);
+    expect(candidates[0].audioLanguage).toBe('english');
+    expect(candidates.some(candidate => candidate.url.includes('spanish'))).toBe(false);
+  });
+
+  test('does not intentionally play a source labelled only as non-English', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        streams: [
+          { name: '[RD+] AIO', title: 'Show.S01E01.Japanese.Audio.1080p.mp4', url: 'https://example.com/japanese.mp4' }
+        ]
+      })
+    });
+
+    await expect(getBestTorrentioStream('tt7654322', 1, 1, 'series', undefined, true))
+      .rejects.toThrow('No source with English or selectable multilingual audio was found.');
+  });
+
   test('backend 504 produces the timeout message', async () => {
     fetchSpy.mockResolvedValueOnce({
       ok: false,
@@ -75,14 +109,89 @@ describe('AIOStreams Network layer', () => {
   });
 
   test('backend 502 produces the provider-connection message', async () => {
-    fetchSpy.mockResolvedValueOnce({
+    vi.useFakeTimers();
+    fetchSpy.mockResolvedValue({
       ok: false,
       status: 502,
       text: async () => "Bad Gateway",
     });
 
-    await expect(getBestTorrentioStream("tt1234567", 1, 1, "series", undefined, true))
+    const promise = getBestTorrentioStream("tt1234567", 1, 1, "series", undefined, true);
+    const assertion = expect(promise)
       .rejects.toThrow("Unable to reach stream provider directly. Please check your configured URL in Settings.");
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    await assertion;
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+  });
+
+  test('temporary 404 is retried automatically and then succeeds', async () => {
+    vi.useFakeTimers();
+    fetchSpy
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () => "Not ready",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => MOCK_AIO_RESPONSE,
+      });
+
+    const promise = getBestTorrentioStream("tt1234567", 1, 1, "series", undefined, true);
+    await vi.advanceTimersByTimeAsync(800);
+
+    await expect(promise).resolves.toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  test('sustained provider-route 404s use the extended recovery window', async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    fetchSpy.mockImplementation(async () => {
+      calls += 1;
+      if (calls < 8) {
+        return {
+          ok: false,
+          status: 404,
+          text: async () => "Route temporarily unavailable",
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => MOCK_AIO_RESPONSE,
+      };
+    });
+
+    const promise = getBestTorrentioStream("tt1234568", 1, 1, "series", undefined, true);
+    const assertion = expect(promise).resolves.toHaveLength(1);
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(8);
+  });
+
+  test('an empty warm-up response is retried automatically', async () => {
+    vi.useFakeTimers();
+    fetchSpy
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ streams: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => MOCK_AIO_RESPONSE,
+      });
+
+    const promise = getBestTorrentioStream("tt1234567", 1, 1, "series", undefined, true);
+    await vi.advanceTimersByTimeAsync(800);
+
+    await expect(promise).resolves.toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
   
   test('cancellation via AbortSignal is respected', async () => {

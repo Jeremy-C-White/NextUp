@@ -2,6 +2,7 @@ import { collection, doc, setDoc, deleteDoc, getDocs, deleteField } from "fireba
 import { db, auth } from "../firebase";
 import { UserShow, UserEpisode, Show, Episode } from "../types";
 import { getEpisodes, resolveTVMazeShow } from "./tvmaze";
+import { getLibraryDocumentIds, LibraryShowIdentity, normalizeLibraryDocumentId } from "./libraryIdentity";
 
 export function removeUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -74,6 +75,11 @@ export async function addShowToLibrary(show: Show, caughtUp: boolean = false): P
     vote_average: show.vote_average || resolvedShow?.vote_average || 0,
   };
 
+  const thetvdbId = resolvedShow?.externals?.thetvdb || show.externals?.thetvdb;
+  if (thetvdbId !== undefined) {
+    userShow.thetvdbId = thetvdbId;
+  }
+
   const tmdbId = show._tmdbId || (show.isMovie && showId < 0 ? (-showId - 1000000000) : undefined);
   if (tmdbId !== undefined) {
     userShow._tmdbId = tmdbId;
@@ -88,12 +94,22 @@ export async function addShowToLibrary(show: Show, caughtUp: boolean = false): P
   return { userShow, userEpisodes };
 }
 
-export async function removeShowFromLibrary(showId: number): Promise<void> {
+export async function removeShowFromLibrary(show: LibraryShowIdentity): Promise<void> {
   const user = auth.currentUser;
   if (!user) throw new Error("Not authenticated");
 
-  const showRef = doc(db, `users/${user.uid}/shows/${showId}`);
-  await deleteDoc(showRef);
+  const documentIds = getLibraryDocumentIds(show);
+  await Promise.all(documentIds.map(documentId => (
+    deleteDoc(doc(db, `users/${user.uid}/shows/${documentId}`))
+  )));
+}
+
+export async function restoreShowToLibrary(show: UserShow): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Not authenticated");
+
+  const showRef = doc(db, `users/${user.uid}/shows/${normalizeLibraryDocumentId(show.id)}`);
+  await setDoc(showRef, removeUndefined(show));
 }
 
 
@@ -163,11 +179,11 @@ export async function getShowEpisodes(showId: number, watchedEpisodes: Record<st
   });
 }
 
-export async function markEpisodeWatched(showId: number, episodeId: string, watched: boolean): Promise<void> {
+export async function markEpisodeWatched(showId: string | number, episodeId: string, watched: boolean): Promise<void> {
   const user = auth.currentUser;
   if (!user) throw new Error("Not authenticated");
 
-  const showRef = doc(db, `users/${user.uid}/shows/${showId}`);
+  const showRef = doc(db, `users/${user.uid}/shows/${normalizeLibraryDocumentId(showId)}`);
   await setDoc(showRef, {
     watchedEpisodes: {
       [episodeId]: watched ? Date.now() : deleteField()
@@ -175,7 +191,7 @@ export async function markEpisodeWatched(showId: number, episodeId: string, watc
   }, { merge: true });
 }
 
-export async function markEpisodesWatchedBatch(showId: number, episodesToMark: string[], watched: boolean): Promise<void> {
+export async function markEpisodesWatchedBatch(showId: string | number, episodesToMark: string[], watched: boolean): Promise<void> {
   const user = auth.currentUser;
   if (!user) throw new Error("Not authenticated");
 
@@ -184,8 +200,25 @@ export async function markEpisodesWatchedBatch(showId: number, episodesToMark: s
     updates[epId] = watched ? Date.now() : deleteField();
   }
 
-  const showRef = doc(db, `users/${user.uid}/shows/${showId}`);
+  const showRef = doc(db, `users/${user.uid}/shows/${normalizeLibraryDocumentId(showId)}`);
   await setDoc(showRef, {
     watchedEpisodes: updates
   }, { merge: true });
+}
+
+export async function setEpisodeProgress(
+  showId: string | number,
+  watchedEpisodeIds: string[],
+  unwatchedEpisodeIds: string[]
+): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Not authenticated");
+
+  const watchedAt = Date.now();
+  const updates: Record<string, any> = {};
+  watchedEpisodeIds.forEach(episodeId => { updates[episodeId] = watchedAt; });
+  unwatchedEpisodeIds.forEach(episodeId => { updates[episodeId] = deleteField(); });
+
+  const showRef = doc(db, `users/${user.uid}/shows/${normalizeLibraryDocumentId(showId)}`);
+  await setDoc(showRef, { watchedEpisodes: updates }, { merge: true });
 }

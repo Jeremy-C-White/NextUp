@@ -53,16 +53,17 @@ export function AuthScreen() {
   };
 
   return (
-    <div className="min-h-dvh bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4">
-      <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl">
+    <div className="min-h-dvh bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center overflow-y-auto px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))]">
+      <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl">
         <div className="w-16 h-16 bg-gradient-to-br from-orange-400 to-orange-600 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-orange-500/20">
           <Tv className="w-8 h-8 text-slate-950" />
         </div>
         
-        <h1 className="text-4xl font-display font-bold text-slate-900 dark:text-white mb-2 tracking-tight">
-          Next<span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-orange-600 font-black italic">Up</span>
+        <h1 className="text-3xl sm:text-4xl font-display font-bold text-slate-900 dark:text-white mb-2 tracking-tight">
+          Next<span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-orange-600 font-black italic">Up</span>{" "}
+          <span className="align-middle text-[0.35em] uppercase tracking-[0.18em] text-orange-500">Phone</span>
         </h1>
-        <p className="text-slate-600 dark:text-slate-400 mb-8 text-lg">
+        <p className="text-slate-600 dark:text-slate-400 mb-6 sm:mb-8 text-base sm:text-lg">
           Track every show. Never lose your place.
         </p>
         

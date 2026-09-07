@@ -1,4 +1,5 @@
 import { PlaybackCandidate } from "../types";
+import { fetchThroughProxy, isWebOSTV } from "./webos";
 
 export interface StreamOption {
   name?: string;
@@ -58,6 +59,9 @@ export interface StreamOption {
       container?: string;
       season?: number;
       episodes?: number[];
+      audio?: string[];
+      languages?: string[];
+      language?: string;
     };
   };
 }
@@ -68,13 +72,15 @@ type ImportMetaWithEnv = ImportMeta & { env?: { VITE_AIOSTREAMS_BASE_URL?: strin
 
 const REQUEST_TIMEOUT_MS = 55_000;
 const BYTES_PER_GB = 1024 ** 3;
-
-const INLINE_AIOSTREAMS_BASE_URL = "";
+const STREAM_LOOKUP_MAX_ATTEMPTS = 8;
+const STREAM_DEFAULT_MAX_ATTEMPTS = 4;
+const STREAM_EMPTY_MAX_ATTEMPTS = 5;
+const STREAM_RETRY_DELAYS_MS = [750, 1_500, 3_000, 6_000, 10_000, 15_000, 20_000];
 
 export function getAioStreamsBaseUrl(): string {
   const localUrl = typeof window !== "undefined" ? localStorage.getItem("aiostreams_base_url")?.trim() : null;
   const environmentUrl = (import.meta as ImportMetaWithEnv).env?.VITE_AIOSTREAMS_BASE_URL?.trim();
-  const configuredUrl = localUrl || environmentUrl || INLINE_AIOSTREAMS_BASE_URL.trim();
+  const configuredUrl = localUrl || environmentUrl;
   if (!configuredUrl) {
     throw new Error("AIOStreams is not configured. Set VITE_AIOSTREAMS_BASE_URL or configure it in Settings.");
   }
@@ -89,6 +95,26 @@ export function getAioStreamsBaseUrl(): string {
     throw new Error("The configured AIOStreams URL must use HTTPS.");
   }
   return normalizedUrl;
+}
+
+let connectionWarmup: Promise<boolean> | null = null;
+
+export function warmAioStreamsConnection(): Promise<boolean> {
+  if (connectionWarmup) return connectionWarmup;
+
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), 15_000);
+  const manifestUrl = `${getAioStreamsBaseUrl()}/manifest.json`;
+
+  connectionWarmup = fetchThroughProxy(manifestUrl, controller.signal)
+    .then(response => response.ok)
+    .catch(() => false)
+    .finally(() => {
+      globalThis.clearTimeout(timeoutId);
+      connectionWarmup = null;
+    });
+
+  return connectionWarmup;
 }
 
 function compactText(value?: string): string {
@@ -108,6 +134,50 @@ function getCombinedStreamText(stream: StreamOption): string {
     .map(compactText)
     .filter(Boolean)
     .join(" ");
+}
+
+export type StreamAudioLanguage = "english" | "multi" | "non-english" | "unknown";
+
+const ENGLISH_AUDIO_MARKER = /\b(?:english|eng)\b/i;
+const MULTI_AUDIO_MARKER = /\b(?:multi(?:[ ._-]*(?:audio|lang(?:uage)?))?|dual[ ._-]*audio)\b/i;
+const NON_ENGLISH_AUDIO_MARKER = /\b(?:spanish|espa(?:ñ|n)ol|french|fran(?:ç|c)ais|german|deutsch|italian|portuguese|russian|japanese|korean|chinese|mandarin|cantonese|hindi|tamil|telugu|arabic|turkish|polish|dutch|ukrainian|czech|thai|vietnamese|indonesian|latino)\b/i;
+
+export function getStreamAudioLanguage(stream: StreamOption): StreamAudioLanguage {
+  const parsedFile = stream.streamData?.parsedFile;
+  const structured = [
+    ...(Array.isArray(parsedFile?.languages) ? parsedFile.languages : []),
+    ...(Array.isArray(parsedFile?.audio) ? parsedFile.audio : []),
+    parsedFile?.language || ""
+  ].map(value => String(value).trim().toLowerCase());
+
+  if (structured.some(value => value === "en" || value === "eng" || value === "english" || value.startsWith("en-"))) {
+    return "english";
+  }
+
+  const text = `${getCombinedStreamText(stream)} ${structured.join(" ")}`;
+  const foreignAudioContext = new RegExp(
+    `(?:${NON_ENGLISH_AUDIO_MARKER.source})[ ._\\-]*(?:audio|dub(?:bed)?)|(?:audio|lang(?:uage)?)[ :=._\\-]*(?:${NON_ENGLISH_AUDIO_MARKER.source})|(?:🌐|🔊)[ :._\\-]*(?:${NON_ENGLISH_AUDIO_MARKER.source})`,
+    "i"
+  );
+  const foreignWithEnglishSubtitles = new RegExp(
+    `(?:${NON_ENGLISH_AUDIO_MARKER.source}).{0,24}\\b(?:english|eng)[ ._\\-]*(?:sub(?:title)?s?|softsub)\\b`,
+    "i"
+  );
+  const hasForeignMarker = foreignAudioContext.test(text) || foreignWithEnglishSubtitles.test(text);
+  const englishSubtitleOnly = /\b(?:english|eng)[ ._-]*(?:sub(?:title)?s?|softsub)\b/i.test(text);
+  const explicitEnglishAudio = /\b(?:english|eng)[ ._-]*(?:audio|dub(?:bed)?)\b/i.test(text);
+  if (hasForeignMarker && englishSubtitleOnly && !explicitEnglishAudio && !MULTI_AUDIO_MARKER.test(text)) {
+    return "non-english";
+  }
+  if (ENGLISH_AUDIO_MARKER.test(text)) return "english";
+  if (MULTI_AUDIO_MARKER.test(text) || structured.some(value => value === "mul" || value.includes("multi") || value.includes("dual"))) {
+    return "multi";
+  }
+  if (hasForeignMarker) return "non-english";
+
+  const knownForeignTags = new Set(["es", "spa", "fr", "fra", "fre", "de", "deu", "ger", "it", "ita", "pt", "por", "ru", "rus", "ja", "jpn", "ko", "kor", "zh", "zho", "chi", "hi", "hin", "ta", "tam", "te", "tel", "ar", "ara", "tr", "tur", "pl", "pol", "nl", "nld", "uk", "ukr", "cs", "ces", "th", "tha", "vi", "vie", "id", "ind"]);
+  if (structured.some(value => knownForeignTags.has(value))) return "non-english";
+  return "unknown";
 }
 
 function getStreamSizeGB(stream: StreamOption): number | null {
@@ -297,6 +367,134 @@ function getDirectStreamUrl(
 
 export type BrowserCompatibility = 'compatible' | 'external' | 'unknown';
 
+export interface StreamMediaProfile {
+  container?: string;
+  videoCodec?: string;
+  audioCodecs: string[];
+  text: string;
+}
+
+function canPlayMimeType(mimeType: string): boolean | null {
+  if (typeof document === "undefined") return null;
+
+  try {
+    const result = document.createElement("video").canPlayType(mimeType);
+    return result === "probably" || result === "maybe";
+  } catch {
+    return null;
+  }
+}
+
+function isAppleMobileClient(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+export function getStreamMediaProfile(stream: StreamOption): StreamMediaProfile {
+  const directUrl = getDirectStreamUrl(stream) || "";
+  const parsedFile = stream.streamData?.parsedFile;
+  const text = `${getCombinedStreamText(stream)} ${directUrl}`.toLowerCase();
+  let container = parsedFile?.container?.toLowerCase().replace(/^\./, "");
+
+  if (!container) {
+    const containerMatch = text.match(/(?:^|[\s._-])(mkv|mp4|m4v|mov|webm|avi|wmv|asf|flv|m2ts|mts|ts|trp|tp|vob|mpg|mpeg)(?:$|[\s?&#._-])/i);
+    container = containerMatch?.[1]?.toLowerCase();
+  }
+
+  const parsedVideoCodec = parsedFile?.encode?.toLowerCase();
+  let videoCodec = parsedVideoCodec;
+  if (!videoCodec) {
+    if (/\b(?:hevc|h[ ._-]?265|x265)\b/i.test(text)) videoCodec = "hevc";
+    else if (/\b(?:avc|h[ ._-]?264|x264)\b/i.test(text)) videoCodec = "h264";
+    else if (/\bav1\b/i.test(text)) videoCodec = "av1";
+    else if (/\bvp9\b/i.test(text)) videoCodec = "vp9";
+    else if (/\bvp8\b/i.test(text)) videoCodec = "vp8";
+    else if (/\b(?:mpeg[ ._-]?2|mpeg2)\b/i.test(text)) videoCodec = "mpeg2";
+    else if (/\b(?:mpeg[ ._-]?4|mpeg4|xvid)\b/i.test(text)) videoCodec = "mpeg4";
+  }
+
+  const parsedAudio = Array.isArray(parsedFile?.audio)
+    ? parsedFile.audio.map(value => value.toLowerCase())
+    : [];
+  const detectedAudio = [
+    /\b(?:eac3|e-ac-3|ddp|dd\+)\b/i.test(text) ? "eac3" : "",
+    /\b(?:ac3|ac-3|dolby[ ._-]*digital)\b/i.test(text) ? "ac3" : "",
+    /\b(?:he[ ._-]*aac|heaac)\b/i.test(text) ? "he-aac" : "",
+    /\baac\b/i.test(text) ? "aac" : "",
+    /\bac[ ._-]?4\b/i.test(text) ? "ac4" : "",
+    /\btruehd\b/i.test(text) ? "truehd" : "",
+    /\bdts(?:[ ._-]*(?:hd|x))?\b/i.test(text) ? "dts" : "",
+    /\bflac\b/i.test(text) ? "flac" : "",
+    /\bopus\b/i.test(text) ? "opus" : "",
+    /\bpcm\b/i.test(text) ? "pcm" : "",
+    /\bmp3\b/i.test(text) ? "mp3" : "",
+    /\bmp2\b/i.test(text) ? "mp2" : ""
+  ].filter(Boolean);
+
+  return {
+    container,
+    videoCodec,
+    audioCodecs: Array.from(new Set([...parsedAudio, ...detectedAudio])),
+    text
+  };
+}
+
+/**
+ * Compatibility profile for the 2025 LG QNED70/webOS 25 media pipeline.
+ * Unknown direct streams remain eligible so the TV can probe their headers,
+ * while explicitly incompatible codec combinations are filtered up front.
+ */
+export function getWebOSTVCompatibility(stream: StreamOption): BrowserCompatibility {
+  if (!getDirectStreamUrl(stream)) return 'external';
+  if (stream.behaviorHints?.proxyHeaders || stream.behaviorHints?.notWebReady === true) return 'external';
+
+  const profile = getStreamMediaProfile(stream);
+  const supportedContainers = new Set([
+    "mp4", "m4v", "mov", "mkv", "ts", "m2ts", "mts", "trp", "tp",
+    "avi", "wmv", "asf", "vob", "mpg", "mpeg", "webm"
+  ]);
+  if (profile.container && !supportedContainers.has(profile.container)) return 'external';
+
+  if (/\b(?:vvc|h[ ._-]?266|x266)\b/i.test(profile.text)) return 'external';
+
+  // QNED70 supports HDR10/HLG, not Dolby Vision. Dual HDR/DV releases retain
+  // an HDR10 fallback and are safe; Dolby Vision-only releases are not.
+  const dolbyVision = /\b(?:dolby[ ._-]*vision|dovi|dv)\b/i.test(profile.text);
+  const hdrFallback = /\b(?:hdr10\+?|hdr|hlg|hybrid)\b/i.test(profile.text);
+  if (dolbyVision && !hdrFallback) return 'external';
+
+  const audioText = profile.audioCodecs.join(" ");
+  const hasReliableAudio = /(?:^|\s)(?:eac3|ac3|he-aac|aac|ac4|pcm|mp3|mp2)(?:$|\s)/i.test(audioText);
+  const hasUnsupportedOnlyAudio = /(?:truehd|dts|flac)/i.test(audioText) && !hasReliableAudio;
+  if (hasUnsupportedOnlyAudio) return 'external';
+
+  return 'compatible';
+}
+
+export function getWebOSTVPreferenceScore(stream: StreamOption): number {
+  const profile = getStreamMediaProfile(stream);
+  let score = 0;
+
+  if (["mp4", "m4v", "mov"].includes(profile.container || "")) score += 800;
+  else if (profile.container === "mkv") score += 650;
+  else if (["ts", "m2ts", "mts", "trp", "tp"].includes(profile.container || "")) score += 450;
+
+  if (/^(?:hevc|h265|x265)$/i.test(profile.videoCodec || "")) score += 900;
+  else if (/^(?:h264|avc|x264)$/i.test(profile.videoCodec || "")) score += 800;
+  else if (/^(?:av1|vp9)$/i.test(profile.videoCodec || "")) score += 300;
+
+  const audioText = profile.audioCodecs.join(" ");
+  if (/(?:^|\s)(?:eac3|ac3|he-aac|aac|ac4)(?:$|\s)/i.test(audioText)) score += 900;
+  else if (/(?:^|\s)(?:pcm|mp3|mp2)(?:$|\s)/i.test(audioText)) score += 500;
+  else if (/\bopus\b/i.test(audioText)) score += 150;
+
+  if (/\b(?:truehd|dts|flac)\b/i.test(audioText)) score -= 1_200;
+
+  if (/\bhdr10\+?\b/i.test(profile.text)) score += 250;
+  return score;
+}
+
 export function getBrowserCompatibility(
   stream: StreamOption
 ): BrowserCompatibility {
@@ -305,6 +503,8 @@ export function getBrowserCompatibility(
   if (!directUrl) {
     return 'external';
   }
+
+  if (isWebOSTV()) return getWebOSTVCompatibility(stream);
 
   if (stream.behaviorHints?.notWebReady === true) {
     return 'external';
@@ -318,49 +518,49 @@ export function getBrowserCompatibility(
     return 'external';
   }
 
-  const parsedFile = stream.streamData?.parsedFile;
-  let container = parsedFile?.container?.toLowerCase();
-  const encode = parsedFile?.encode?.toLowerCase();
-  const audio = Array.isArray((parsedFile as any)?.audio) ? (parsedFile as any).audio.map((a: string) => a.toLowerCase()) : [];
-
-  const text = (getCombinedStreamText(stream) + " " + directUrl).toLowerCase();
-
-  if (!container) {
-    if (/\bmkv\b|\.mkv\b/.test(text)) container = 'mkv';
-    else if (/\bavi\b|\.avi\b/.test(text)) container = 'avi';
-    else if (/\bwmv\b|\.wmv\b/.test(text)) container = 'wmv';
-    else if (/\bflv\b|\.flv\b/.test(text)) container = 'flv';
-    else if (/\bm2ts\b|\.m2ts\b/.test(text)) container = 'm2ts';
-    else if (/\.ts\b/.test(text)) container = 'ts';
-    else if (/\bvob\b|\.vob\b/.test(text)) container = 'vob';
-    else if (/\bmp4\b|\.mp4\b/.test(text)) container = 'mp4';
-    else if (/\bwebm\b|\.webm\b/.test(text)) container = 'webm';
-    else if (/\bm4v\b|\.m4v\b/.test(text)) container = 'm4v';
-    else if (/\bmov\b|\.mov\b/.test(text)) container = 'mov';
-  }
+  const profile = getStreamMediaProfile(stream);
+  const { container, text } = profile;
+  const encode = profile.videoCodec;
+  const audio = profile.audioCodecs;
 
   if (container) {
     if (['mkv', 'avi', 'wmv', 'flv', 'ts', 'm2ts', 'vob'].includes(container)) {
       return 'external';
     }
     
-    if (['mp4', 'm4v', 'mov', 'webm'].includes(container)) {
-      // Check for clearly incompatible codecs inside web-friendly containers
+    if (['mp4', 'm4v', 'mov'].includes(container)) {
       const hasHevc = encode === 'hevc' || encode === 'h265' || /\bhevc\b|\bh265\b|\bx265\b/.test(text);
-      const hasIncompatibleAudio = audio.some((a: string) => ['dts', 'truehd', 'flac'].includes(a)) || 
-                                   /\bdts\b|\btruehd\b|\bflac\b/.test(text);
-      
-      if (hasHevc || hasIncompatibleAudio) {
-         return 'external';
+      const reliableAudio = audio.some(value => /^(?:aac|he-aac|ac3|eac3|mp3)$/i.test(value));
+      const unsupportedAudio = audio.some(value => /^(?:dts|truehd|flac)$/i.test(value));
+
+      // Many iPhones can decode HEVC in MP4 natively. Ask the actual browser
+      // instead of rejecting every x265 release from its filename alone.
+      if (hasHevc) {
+        const supportsHevc = canPlayMimeType('video/mp4; codecs="hvc1"') === true ||
+          canPlayMimeType('video/mp4; codecs="hev1"') === true;
+        if (supportsHevc !== true) return 'external';
       }
+
+      // Multi-audio files often include AAC alongside a cinema codec. Reject
+      // only when the metadata says every known option is phone-incompatible.
+      if (unsupportedAudio && !reliableAudio) return 'external';
       return 'compatible';
+    }
+
+    if (container === 'webm') {
+      if (isAppleMobileClient()) return 'external';
+      const supported = canPlayMimeType('video/webm');
+      return supported === false ? 'external' : supported === true ? 'compatible' : 'unknown';
     }
   }
 
-  if (/\bhevc\b|\bh265\b|\bx265\b/.test(text) || /\bdts\b|\btruehd\b|\bflac\b/.test(text)) {
+  if (/\bdts\b|\btruehd\b|\bflac\b/.test(text)) {
     return 'external';
   }
 
+  // Debrid links are frequently opaque and omit the original extension.
+  // Keep an unknown direct URL available for runtime probing by the phone's
+  // native video element instead of prematurely sending it to an external app.
   return 'unknown';
 }
 
@@ -410,9 +610,37 @@ function isMobileClient(): boolean {
     return false;
   }
 
-  return /iPhone|iPad|iPod|Android/i.test(
-    navigator.userAgent
-  );
+  return /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function getPhonePlaybackPreferenceScore(stream: StreamOption): number {
+  const profile = getStreamMediaProfile(stream);
+  const container = profile.container || "";
+  const codec = profile.videoCodec || "";
+  const quality = getQualityLabel(stream).toLowerCase();
+  const sizeGB = getStreamSizeGB(stream);
+  let score = 0;
+
+  if (["mp4", "m4v", "mov"].includes(container)) score += 300_000;
+  else if (!container) score += 25_000;
+
+  if (/^(?:h264|avc|x264)$/i.test(codec)) score += 80_000;
+  else if (/^(?:hevc|h265|x265)$/i.test(codec) && getBrowserCompatibility(stream) === "compatible") score += 55_000;
+
+  if (quality.includes("1080")) score += 30_000;
+  else if (quality.includes("720")) score += 20_000;
+  else if (quality.includes("2160") || quality.includes("4k") || quality.includes("uhd")) score -= 15_000;
+
+  // Prefer streams that are practical on a cellular connection while keeping
+  // larger releases available as fallbacks.
+  if (sizeGB !== null) {
+    if (sizeGB <= 3) score += 18_000;
+    else if (sizeGB <= 8) score += 8_000;
+    else if (sizeGB >= 20) score -= 20_000;
+  }
+
+  return score;
 }
 
 export function isHardRejectTrailer(stream: StreamOption, type: PlaybackType): boolean {
@@ -638,6 +866,42 @@ export function calculateStreamScore(
     score -= 500_000; // Heavily penalize uncached so they fall to the very bottom
   }
 
+  if (mobile) {
+    score += getPhonePlaybackPreferenceScore(stream);
+  }
+
+  const audioLanguage = getStreamAudioLanguage(stream);
+  if (audioLanguage === "english") {
+    score += 250_000;
+  } else if (audioLanguage === "multi") {
+    score += 100_000;
+  } else if (audioLanguage === "non-english") {
+    score -= 750_000;
+  }
+
+  // Large-screen clients should try the best confirmed quality first. Keep
+  // cached state and native compatibility as stronger signals than resolution.
+  if (!mobile) {
+    const quality = getQualityLabel(stream).toLowerCase();
+    if (quality.includes("2160") || quality.includes("4k") || quality.includes("uhd")) {
+      score += 4_000;
+    } else if (quality.includes("1440")) {
+      score += 2_500;
+    } else if (quality.includes("1080")) {
+      score += 1_500;
+    } else if (quality.includes("720")) {
+      score += 500;
+    }
+
+    if (isWebOSTV() && /\b(?:hdr10\+?|hlg)\b/i.test(getCombinedStreamText(stream))) {
+      score += 500;
+    }
+
+    if (isWebOSTV()) {
+      score += getWebOSTVPreferenceScore(stream);
+    }
+  }
+
   // Exact episode / season match bonus
   if (type === "series") {
     if (isEpisodeMismatch(stream, season, episode)) {
@@ -737,12 +1001,173 @@ async function readErrorResponse(
   }
 }
 
+export interface StreamLookupRetry {
+  attempt: number;
+  maxAttempts: number;
+  status?: number;
+  message: string;
+}
+
+type StreamLookupProgress = (progress: StreamLookupRetry) => void;
+
+function waitForStreamRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+
+  return new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function streamResponseError(status: number, detail: string): Error {
+  if (status === 404) {
+    return new Error("The private AIOStreams route stayed unavailable after automatic recovery attempts. Wait a moment and try again. If this continues, the saved AIOStreams installation URL may need to be regenerated.");
+  }
+  if (status === 504) {
+    return new Error("Stream resolution timed out. Please check your network connection or configured AIOStreams/Stremio URL in Settings.");
+  }
+  if (status === 502) {
+    return new Error("Unable to reach stream provider directly. Please check your configured URL in Settings.");
+  }
+
+  return new Error(`AIOStreams returned error ${status}.${detail ? ` ${detail}` : ""}`);
+}
+
+function isRetryableStreamStatus(status: number): boolean {
+  return status === 404 || status === 408 || status === 425 || status === 429 ||
+    status === 500 || status === 502 || status === 503;
+}
+
+function streamRetryLimit(status?: number, reason?: "network" | "empty" | "invalid"): number {
+  if (status === 404) return STREAM_LOOKUP_MAX_ATTEMPTS;
+  if (status === 429 || reason === "empty") return STREAM_EMPTY_MAX_ATTEMPTS;
+  return STREAM_DEFAULT_MAX_ATTEMPTS;
+}
+
+function streamRetryDelay(attempt: number): number {
+  return STREAM_RETRY_DELAYS_MS[Math.min(attempt - 1, STREAM_RETRY_DELAYS_MS.length - 1)];
+}
+
+function retryMessage(status?: number, reason?: "network" | "empty" | "invalid"): string {
+  if (status === 404) return "Source service is warming up";
+  if (status === 429) return "Source service is busy";
+  if (reason === "empty") return "Sources are still being prepared";
+  if (reason === "invalid") return "Source service returned an incomplete response";
+  if (reason === "network") return "Source connection was interrupted";
+  return "Source service is temporarily unavailable";
+}
+
+async function fetchStreamOptionsWithRetry(
+  requestUrl: string,
+  signal: AbortSignal,
+  onRetry?: StreamLookupProgress
+): Promise<unknown[]> {
+  let lastError = new Error("The source lookup failed.");
+
+  for (let attempt = 1; attempt <= STREAM_LOOKUP_MAX_ATTEMPTS; attempt++) {
+    let response: Response;
+
+    try {
+      response = await fetchThroughProxy(requestUrl, signal);
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+
+      lastError = new Error("Unable to reach stream provider proxy. Please check your configured URL in Settings.");
+      const maxAttempts = streamRetryLimit(undefined, "network");
+      if (attempt >= maxAttempts) throw lastError;
+
+      onRetry?.({
+        attempt: attempt + 1,
+        maxAttempts,
+        message: retryMessage(undefined, "network")
+      });
+      await waitForStreamRetry(streamRetryDelay(attempt), signal);
+      continue;
+    }
+
+    if (!response.ok) {
+      const detail = await readErrorResponse(response);
+      lastError = streamResponseError(response.status, detail);
+      const maxAttempts = streamRetryLimit(response.status);
+
+      if (!isRetryableStreamStatus(response.status) || attempt >= maxAttempts) {
+        throw lastError;
+      }
+
+      onRetry?.({
+        attempt: attempt + 1,
+        maxAttempts,
+        status: response.status,
+        message: retryMessage(response.status)
+      });
+      await waitForStreamRetry(streamRetryDelay(attempt), signal);
+      continue;
+    }
+
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      lastError = new Error("AIOStreams returned a response that was not valid JSON.");
+      const maxAttempts = streamRetryLimit(undefined, "invalid");
+      if (attempt >= maxAttempts) throw lastError;
+
+      onRetry?.({
+        attempt: attempt + 1,
+        maxAttempts,
+        message: retryMessage(undefined, "invalid")
+      });
+      await waitForStreamRetry(streamRetryDelay(attempt), signal);
+      continue;
+    }
+
+    if (!data || typeof data !== "object" || !Array.isArray((data as { streams?: unknown }).streams)) {
+      lastError = new Error("AIOStreams returned an invalid stream response.");
+      const maxAttempts = streamRetryLimit(undefined, "invalid");
+      if (attempt >= maxAttempts) throw lastError;
+
+      onRetry?.({
+        attempt: attempt + 1,
+        maxAttempts,
+        message: retryMessage(undefined, "invalid")
+      });
+      await waitForStreamRetry(streamRetryDelay(attempt), signal);
+      continue;
+    }
+
+    const streams = (data as { streams: unknown[] }).streams;
+    if (streams.some(isStreamOption)) return streams;
+
+    lastError = new Error("No sources were returned. Check the IMDb mapping and your enabled AIOStreams addons.");
+    const maxAttempts = streamRetryLimit(undefined, "empty");
+    if (attempt >= maxAttempts) throw lastError;
+
+    onRetry?.({
+      attempt: attempt + 1,
+      maxAttempts,
+      message: retryMessage(undefined, "empty")
+    });
+    await waitForStreamRetry(streamRetryDelay(attempt), signal);
+  }
+
+  throw lastError;
+}
+
 interface StreamCacheEntry {
   resolvedAt: number | null;
   promise: Promise<PlaybackCandidate[]>;
 }
 const STREAM_CACHE = new Map<string, StreamCacheEntry>();
-const STREAM_CACHE_TTL_MS = 300_000;
+const STREAM_CACHE_TTL_MS = 900_000;
 
 export async function getBestTorrentioStream(
   imdbId: string,
@@ -750,7 +1175,8 @@ export async function getBestTorrentioStream(
   episode: number,
   type: PlaybackType = "series",
   signal?: AbortSignal,
-  forceRefresh: boolean = false
+  forceRefresh: boolean = false,
+  onRetry?: StreamLookupProgress
 ): Promise<PlaybackCandidate[]> {
   const normalizedImdbId = imdbId.trim();
   const streamId = type === "movie" ? normalizedImdbId : `${normalizedImdbId}:${season}:${episode}`;
@@ -769,7 +1195,7 @@ export async function getBestTorrentioStream(
     }
   }
 
-  const promise = fetchBestStreamImpl(imdbId, season, episode, type, signal);
+  const promise = fetchBestStreamImpl(imdbId, season, episode, type, signal, onRetry);
   const entry: StreamCacheEntry = { resolvedAt: null, promise };
   STREAM_CACHE.set(cacheKey, entry);
 
@@ -793,7 +1219,8 @@ async function fetchBestStreamImpl(
   season: number,
   episode: number,
   type: PlaybackType = "series",
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onRetry?: StreamLookupProgress
 ): Promise<PlaybackCandidate[]> {
   const normalizedImdbId = imdbId.trim();
 
@@ -824,8 +1251,6 @@ async function fetchBestStreamImpl(
 
   const baseUrl = getAioStreamsBaseUrl();
   const requestUrl = `${baseUrl}/stream/${type}/${streamId}.json`;
-  const proxyUrl = `/api/debrid/stream?url=${encodeURIComponent(requestUrl)}`;
-
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
     () => controller.abort(),
@@ -836,17 +1261,10 @@ async function fetchBestStreamImpl(
     signal.addEventListener("abort", () => controller.abort());
   }
 
-  let response: Response;
+  let rawStreams: unknown[];
 
   try {
-    response = await fetch(proxyUrl, {
-      method: "GET",
-      headers: {
-        Accept: "application/json"
-      },
-      cache: "no-store",
-      signal: controller.signal
-    });
+    rawStreams = await fetchStreamOptionsWithRetry(requestUrl, controller.signal, onRetry);
   } catch (error: unknown) {
     if (
       error instanceof Error &&
@@ -856,57 +1274,15 @@ async function fetchBestStreamImpl(
         "Stream resolution timed out. Please check your network connection or configured AIOStreams/Stremio URL in Settings."
       );
     }
+    if (error instanceof Error) {
+      throw error;
+    }
     throw new Error(
       "Unable to reach stream provider proxy. Please check your configured URL in Settings."
     );
   } finally {
     window.clearTimeout(timeoutId);
   }
-
-  if (!response.ok) {
-    const responseMessage =
-      await readErrorResponse(response);
-
-    if (response.status === 504) {
-      throw new Error("Stream resolution timed out. Please check your network connection or configured AIOStreams/Stremio URL in Settings.");
-    } else if (response.status === 502) {
-      throw new Error("Unable to reach stream provider directly. Please check your configured URL in Settings.");
-    }
-
-    const detail = responseMessage
-      ? ` ${responseMessage}`
-      : "";
-
-    throw new Error(
-      `AIOStreams returned error ${response.status}.${detail}`
-    );
-  }
-
-  let data: unknown;
-
-  try {
-    data = await response.json();
-  } catch {
-    throw new Error(
-      "AIOStreams returned a response that was not valid JSON."
-    );
-  }
-
-  if (
-    !data ||
-    typeof data !== "object" ||
-    !Array.isArray(
-      (data as { streams?: unknown }).streams
-    )
-  ) {
-    throw new Error(
-      "AIOStreams returned an invalid stream response."
-    );
-  }
-
-  const rawStreams = (
-    data as { streams: unknown[] }
-  ).streams;
 
   const streams = rawStreams.filter(isStreamOption);
 
@@ -930,12 +1306,8 @@ async function fetchBestStreamImpl(
     return true;
   });
 
-  /*
-   * Your app and VLC need a resolved URL.
-   *
-   * Do not convert an infoHash-only result into a PlaybackCandidate
-   * with an undefined URL.
-   */
+  // The in-app TV player needs a resolved HTTP(S) media URL. Never convert an
+  // infoHash-only result into a PlaybackCandidate with an undefined URL.
   const directStreams = uniqueStreams.filter(
     (stream) => getDirectStreamUrl(stream) !== null
   );
@@ -980,6 +1352,17 @@ async function fetchBestStreamImpl(
     );
   }
 
+  // Never intentionally start a release explicitly labelled as foreign-only.
+  // Unlabelled releases remain available because many English releases omit a
+  // language tag; the player performs a second check against embedded tracks.
+  const languageEligibleStreams = streamsToProcess.filter(
+    stream => getStreamAudioLanguage(stream) !== "non-english"
+  );
+
+  if (languageEligibleStreams.length === 0) {
+    throw new Error("No source with English or selectable multilingual audio was found.");
+  }
+
   const mobile = isMobileClient();
 
   interface PlaybackCandidateInternal extends PlaybackCandidate {
@@ -987,7 +1370,7 @@ async function fetchBestStreamImpl(
 }
 
   const playbackCandidates: PlaybackCandidateInternal[] =
-    streamsToProcess.map((stream, index) => {
+    languageEligibleStreams.map((stream, index) => {
       const directUrl = getDirectStreamUrl(stream);
 
       /*
@@ -1000,8 +1383,7 @@ async function fetchBestStreamImpl(
         );
       }
 
-      const browserEligible =
-        getBrowserCompatibility(stream) === 'compatible';
+      const browserCompatibility = getBrowserCompatibility(stream);
 
       const seeders =
         getStreamSeeders(stream);
@@ -1010,6 +1392,8 @@ async function fetchBestStreamImpl(
         getQualityLabel(stream);
 
       const parsedInfo = parseStreamInfo(stream);
+      const audioLanguage = getStreamAudioLanguage(stream);
+      const mediaProfile = getStreamMediaProfile(stream);
 
       return {
         id: stream.infoHash?.trim()
@@ -1028,14 +1412,26 @@ async function fetchBestStreamImpl(
 
         sizeBytes: getStreamSizeBytes(stream),
 
-        container: browserEligible
+        container: browserCompatibility === "compatible"
           ? "web-compatible"
-          : "external",
+          : browserCompatibility === "unknown"
+            ? "web-probe"
+            : "external",
+
+        playbackSupport: browserCompatibility === "compatible"
+          ? "native"
+          : browserCompatibility === "unknown"
+            ? "probe"
+            : "external",
+
+        mediaContainer: mediaProfile.container,
+        videoCodec: mediaProfile.videoCodec,
+        audioCodec: mediaProfile.audioCodecs.join(" / ") || undefined,
 
         score: calculateStreamScore(
           stream,
           index,
-          streamsToProcess.length,
+          languageEligibleStreams.length,
           mobile,
           type,
           season,
@@ -1045,11 +1441,22 @@ async function fetchBestStreamImpl(
 
         seeders,
         readiness: parsedInfo.readiness,
-        provider: parsedInfo.provider
+        provider: parsedInfo.provider,
+        audioLanguage: audioLanguage === "non-english" ? "unknown" : audioLanguage
       };
     });
 
   playbackCandidates.sort((first, second) => {
+    const supportTier = { native: 3, probe: 2, external: 1 };
+    const firstSupport = supportTier[first.playbackSupport || "external"];
+    const secondSupport = supportTier[second.playbackSupport || "external"];
+    if (firstSupport !== secondSupport) return secondSupport - firstSupport;
+
+    const languageTier = { english: 3, multi: 2, unknown: 1 };
+    const firstLanguageTier = languageTier[first.audioLanguage || "unknown"];
+    const secondLanguageTier = languageTier[second.audioLanguage || "unknown"];
+    if (firstLanguageTier !== secondLanguageTier) return secondLanguageTier - firstLanguageTier;
+
     const tier = { cached: 2, unknown: 1, uncached: 0 };
     const firstTier = tier[first.cacheState];
     const secondTier = tier[second.cacheState];
@@ -1066,78 +1473,12 @@ async function fetchBestStreamImpl(
   }
 
   const compatible = finalCandidates.filter(c => c.container === "web-compatible");
+  const probe = finalCandidates.filter(c => c.container === "web-probe");
   const external = finalCandidates.filter(c => c.container === "external");
 
   return [
     ...compatible.slice(0, 15),
+    ...probe.slice(0, 12),
     ...external.slice(0, 15)
   ];
-}
-
-export function openExternalPlayer(
-  directStreamUrl: string
-): void {
-  if (typeof window === "undefined") {
-    throw new Error(
-      "External playback is only available in the browser."
-    );
-  }
-
-  let parsedUrl: URL;
-
-  try {
-    parsedUrl = new URL(directStreamUrl);
-  } catch {
-    throw new Error(
-      "The selected source does not have a valid playback URL."
-    );
-  }
-
-  if (
-    parsedUrl.protocol !== "https:" &&
-    parsedUrl.protocol !== "http:"
-  ) {
-    throw new Error(
-      "The selected source uses an unsupported URL format."
-    );
-  }
-
-  const isIOS =
-    /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
-    (
-      navigator.platform === "MacIntel" &&
-      navigator.maxTouchPoints > 1
-    );
-
-  const isAndroid =
-    /Android/i.test(navigator.userAgent);
-
-  if (isIOS) {
-    const vlcUrl =
-      "vlc-x-callback://x-callback-url/stream" +
-      `?url=${encodeURIComponent(parsedUrl.toString())}`;
-
-    window.location.assign(vlcUrl);
-    return;
-  }
-
-  if (isAndroid) {
-    const vlcUrl =
-      `vlc://${parsedUrl.toString()}`;
-
-    window.location.assign(vlcUrl);
-    return;
-  }
-
-  const openedWindow = window.open(
-    parsedUrl.toString(),
-    "_blank",
-    "noopener,noreferrer"
-  );
-
-  if (!openedWindow) {
-    throw new Error(
-      "The browser blocked the playback window. Allow pop-ups and try again."
-    );
-  }
 }

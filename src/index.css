@@ -1,11 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap');
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-mono: ui-monospace, monospace;
 }
 
 @layer base {
@@ -20,6 +19,523 @@
     -webkit-touch-callout: none;
     -webkit-user-select: none;
   }
+
+  .tv-mode body {
+    overscroll-behavior: none;
+    scroll-behavior: auto;
+  }
+
+  .tv-mode {
+    --tv-safe-inline: clamp(48px, 3.25vw, 64px);
+    --tv-safe-block: clamp(32px, 3vw, 48px);
+  }
+
+  .tv-mode [data-tv-row],
+  .tv-mode [role="dialog"] [class*="overflow-y-auto"] {
+    scroll-behavior: auto;
+    overscroll-behavior: contain;
+    scroll-padding: 4rem;
+  }
+
+  .tv-mode [data-tv-row] {
+    scroll-snap-type: none !important;
+    contain: layout style;
+  }
+
+  [data-tv-sort-buttons] {
+    display: none;
+  }
+
+  .tv-mode [data-tv-native-sort] {
+    display: none !important;
+  }
+
+  .tv-mode [data-tv-sort-buttons] {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .tv-mode [data-tv-card] {
+    contain: layout style;
+    position: relative;
+    isolation: isolate;
+  }
+
+  /* Keep the complete orange focus treatment inside the artwork. This stays
+     visible at the edges of TV rails and inside overflow-clipped modals. */
+  .tv-mode [data-tv-card]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 70;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 5px transparent, inset 0 0 0 9px transparent;
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  .tv-mode [data-tv-card]:focus-within::after {
+    box-shadow: inset 0 0 0 5px #fb923c, inset 0 0 0 9px rgb(249 115 22 / 30%);
+    opacity: 1;
+  }
+
+  .tv-mode [data-tv-card] img {
+    transform: scale(1);
+    transform-origin: center;
+    transition-property: transform, filter, opacity !important;
+    transition-duration: 160ms !important;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+  }
+
+  .tv-mode [data-tv-card]:focus-within img {
+    transform: scale(1.04);
+    filter: saturate(1.1) brightness(1.06);
+  }
+
+  .tv-mode:not(.tv-remote-active) [data-tv-card]:hover:not(:focus-within)::after {
+    box-shadow: inset 0 0 0 3px rgb(251 146 60 / 82%), inset 0 0 0 7px rgb(249 115 22 / 18%);
+    opacity: 1;
+  }
+
+  .tv-mode:not(.tv-remote-active) :is(button, a[href], [role="button"]) {
+    cursor: pointer;
+  }
+
+  /* Horizontal TV rails stay cheap to render while their internal focus
+     borders remain fully visible. */
+  .tv-mode [data-tv-queue-row],
+  .tv-mode [data-tv-queue-card] {
+    contain: layout style;
+  }
+
+  .tv-mode [data-tv-queue-row] {
+    scroll-padding-inline: 1rem;
+  }
+
+  /* Up Next is one remote-first horizontal queue on TV. */
+  .tv-mode .tv-up-next-shell {
+    height: 100vh;
+    min-height: 100vh;
+    overflow: hidden;
+    padding-bottom: 0 !important;
+  }
+
+  .tv-mode .tv-up-next-shell > header {
+    box-sizing: border-box;
+    height: 84px;
+    min-height: 84px;
+    position: relative;
+  }
+
+  .tv-mode .tv-up-next-shell > [data-tv-main] {
+    box-sizing: border-box;
+    height: calc(100vh - 190px);
+    padding-top: 18px !important;
+    padding-bottom: 18px !important;
+    overflow: visible;
+  }
+
+  .tv-mode .tv-up-next-shell > [data-tv-main] > div,
+  .tv-mode [data-tv-up-next-screen] {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .tv-mode [data-tv-up-next-screen] {
+    overflow: visible;
+  }
+
+  .tv-mode [data-tv-up-next-stage] {
+    --up-next-hero-width: clamp(560px, 44vw, 760px);
+    box-sizing: border-box;
+    width: 100vw;
+    max-width: 100vw;
+    margin-left: calc(50% - 50vw) !important;
+    margin-right: calc(50% - 50vw) !important;
+    padding-left: var(--tv-safe-inline) !important;
+    padding-right: 0 !important;
+    flex: 1 1 auto;
+    min-height: 0;
+    align-items: flex-start;
+    overflow: hidden;
+  }
+
+  .tv-mode [data-tv-up-next-hero] {
+    width: var(--up-next-hero-width) !important;
+    min-width: var(--up-next-hero-width) !important;
+    height: calc(100% - 4px) !important;
+    min-height: 0 !important;
+  }
+
+  .tv-mode [data-tv-up-next-stage] > [data-tv-up-next-hero]:only-child {
+    width: calc(100vw - var(--tv-safe-inline) - var(--tv-safe-inline)) !important;
+    min-width: calc(100vw - var(--tv-safe-inline) - var(--tv-safe-inline)) !important;
+  }
+
+  /* Keep the section title and the full-width hero stage on the same safe-area
+     grid. The large hero remains full-bleed without hugging an overscanned edge. */
+  .tv-mode [data-tv-up-next-screen] > .tv-up-next-heading {
+    box-sizing: border-box;
+    width: 100vw;
+    max-width: 100vw;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+    padding-left: var(--tv-safe-inline);
+    padding-right: var(--tv-safe-inline);
+  }
+
+  .tv-mode [data-tv-up-next-rail] {
+    height: 100%;
+    min-width: 0;
+    scroll-padding-inline: 1rem;
+  }
+
+  .tv-mode [data-tv-up-next-thumbnail] {
+    height: 78% !important;
+    min-height: 0 !important;
+  }
+
+  .tv-mode [data-tv-up-next-hero-content] {
+    animation: up-next-crossfade 120ms ease-out both;
+  }
+
+  .tv-mode [class*="backdrop-blur"] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .tv-mode [class*="shadow-"] {
+    box-shadow: none !important;
+  }
+
+  .tv-mode :is([class*="transition-"], [class*="duration-"]) {
+    transition-duration: 80ms !important;
+  }
+
+  .tv-mode [data-tv-card] img {
+    transition-duration: 160ms !important;
+  }
+
+  .tv-mode :is(.animate-in, .animate-pulse) {
+    animation: none !important;
+  }
+
+  .tv-mode :is(button, a, input:not([type="range"]), select, textarea, video, [tabindex]):focus {
+    outline: none !important;
+    box-shadow: inset 0 0 0 5px #fb923c, inset 0 0 0 9px rgb(249 115 22 / 30%) !important;
+  }
+
+  .tv-mode :is(button, a, [tabindex]):focus {
+    z-index: 60;
+    transition: box-shadow 120ms ease, background-color 120ms ease, color 120ms ease;
+  }
+
+  .tv-mode [data-tv-card]:focus-within {
+    outline: none !important;
+    border-color: #fb923c !important;
+    transform: none !important;
+    z-index: 35;
+  }
+
+  .tv-mode [data-tv-card] > button.absolute.inset-0:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  /* The player scrubber gets its own large, round focus affordance instead of
+     inheriting the rectangular focus treatment used by fields and buttons. */
+  .tv-mode input[type="range"][aria-label="Video progress"] {
+    -webkit-appearance: none;
+    appearance: none;
+    min-height: 42px;
+    height: 42px;
+    padding: 0;
+    background: transparent;
+    outline: none;
+    box-shadow: none !important;
+    cursor: pointer;
+  }
+
+  .tv-mode input[type="range"][aria-label="Video progress"]::-webkit-slider-runnable-track {
+    height: 8px;
+    border: 1px solid rgb(255 255 255 / 20%);
+    border-radius: 999px;
+    background: rgb(255 255 255 / 24%);
+  }
+
+  .tv-mode input[type="range"][aria-label="Video progress"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    margin-top: -11px;
+    border: 4px solid #020617;
+    border-radius: 999px;
+    background: #fb923c;
+    box-shadow: 0 0 0 2px rgb(255 255 255 / 32%);
+  }
+
+  .tv-mode input[type="range"][aria-label="Video progress"]:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px #fb923c, 0 0 0 9px rgb(249 115 22 / 32%);
+  }
+
+  .tv-mode video::cue {
+    color: #fff;
+    background: rgb(2 6 23 / 88%);
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 34px;
+    font-weight: 700;
+    line-height: 1.35;
+    text-shadow: 0 2px 5px rgb(0 0 0 / 90%);
+  }
+
+  .tv-mode [aria-label="Video player"] > div:first-of-type {
+    top: var(--tv-safe-block) !important;
+    right: var(--tv-safe-inline) !important;
+  }
+
+  .tv-mode [aria-label="Video player"] > div[aria-hidden]:not(:first-child) > div.absolute {
+    top: var(--tv-safe-block) !important;
+    padding-left: var(--tv-safe-inline) !important;
+    padding-right: var(--tv-safe-inline) !important;
+  }
+
+  .tv-mode [aria-label="Video player"] [data-tv-section="player-controls"] {
+    padding-left: var(--tv-safe-inline) !important;
+    padding-right: var(--tv-safe-inline) !important;
+    padding-bottom: var(--tv-safe-block) !important;
+    transition-duration: 160ms !important;
+  }
+
+  .tv-mode [aria-label="Video player"] > div[aria-hidden] {
+    transition-duration: 160ms !important;
+  }
+
+  .tv-mode.tv-remote-active,
+  .tv-mode.tv-remote-active * {
+    cursor: none !important;
+  }
+}
+
+@media (min-width: 1600px) {
+  .tv-mode {
+    font-size: 19px;
+  }
+
+  .tv-mode body {
+    line-height: 1.5;
+  }
+
+  .tv-mode #root > div > header {
+    box-sizing: border-box;
+    height: 84px;
+    min-height: 84px;
+    padding: 12px var(--tv-safe-inline) !important;
+  }
+
+  .tv-mode #root > div > header button {
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .tv-mode .max-w-7xl {
+    max-width: 1760px !important;
+  }
+
+  .tv-mode main {
+    padding-bottom: 10rem !important;
+  }
+
+  .tv-mode [data-tv-section] [data-tv-card] {
+    width: 260px !important;
+  }
+
+  .tv-mode [data-tv-up-next-screen] [data-tv-up-next-stage] [data-tv-up-next-hero][data-tv-card] {
+    width: var(--up-next-hero-width) !important;
+    min-width: var(--up-next-hero-width) !important;
+  }
+
+  .tv-mode [data-tv-section] [data-tv-card][data-tv-queue-card] {
+    width: 360px !important;
+    min-width: 360px !important;
+  }
+
+  .tv-mode [data-tv-up-next-screen] [data-tv-card][data-tv-queue-card] {
+    width: 300px !important;
+    min-width: 300px !important;
+  }
+
+  .tv-mode :is(button, a[href], input, select, textarea) {
+    min-height: 58px;
+  }
+
+  .tv-mode button[aria-label] {
+    min-width: 64px;
+    min-height: 64px;
+  }
+
+  .tv-mode :is(.text-xs, [class*="text-[10px]"], [class*="text-[11px]"]) {
+    font-size: 18px !important;
+    line-height: 1.3 !important;
+  }
+
+  .tv-mode .text-sm {
+    font-size: 20px !important;
+    line-height: 1.4 !important;
+  }
+
+  .tv-mode .text-base {
+    font-size: 20px !important;
+  }
+
+  .tv-mode [data-tv-library-manager] {
+    width: calc(100vw - var(--tv-safe-inline) - var(--tv-safe-inline)) !important;
+    max-width: none !important;
+    height: calc(100vh - var(--tv-safe-block) - var(--tv-safe-block)) !important;
+    max-height: none !important;
+  }
+
+  .tv-mode [data-tv-modal-overlay] {
+    box-sizing: border-box;
+    padding: var(--tv-safe-block) var(--tv-safe-inline) !important;
+    animation: tv-overlay-fade 160ms ease-out both !important;
+  }
+
+  .tv-mode [data-tv-modal-surface] {
+    max-width: calc(100vw - var(--tv-safe-inline) - var(--tv-safe-inline)) !important;
+    max-height: calc(100vh - var(--tv-safe-block) - var(--tv-safe-block)) !important;
+    animation: tv-surface-fade 160ms ease-out both !important;
+    box-shadow: 0 24px 72px rgb(0 0 0 / 42%) !important;
+  }
+
+  .tv-mode [data-tv-modal-surface="search"] {
+    width: 960px !important;
+  }
+
+  .tv-mode [data-tv-modal-surface="settings"] {
+    width: 700px !important;
+    padding: 32px !important;
+  }
+
+  .tv-mode [data-tv-search-results] {
+    padding-left: 28px !important;
+    padding-right: 28px !important;
+    padding-bottom: 28px !important;
+    scroll-padding-block: 72px;
+  }
+
+  .tv-mode [data-tv-search-result] {
+    gap: 20px !important;
+    padding: 16px !important;
+  }
+
+  .tv-mode [data-tv-search-poster] {
+    width: 80px !important;
+    height: 120px !important;
+    flex: none;
+  }
+
+  .tv-mode [data-tv-library-manager] [data-tv-show-hero] {
+    min-height: 176px !important;
+    padding: 24px 32px !important;
+  }
+
+  .tv-mode [data-tv-library-manager] [data-tv-details-sidebar] {
+    width: 330px !important;
+    padding: 24px !important;
+  }
+
+  .tv-mode [data-tv-library-manager] [data-tv-progress-panel] {
+    min-width: 0;
+  }
+
+  .tv-mode [data-tv-library-manager] [data-tv-episode-list] {
+    padding: 20px 24px !important;
+    scroll-padding-block: 110px;
+  }
+
+  .tv-mode [data-tv-library-manager] [data-tv-episode-row] {
+    min-height: 118px;
+    padding: 16px 18px !important;
+  }
+
+  .tv-mode [data-tv-bottom-nav] {
+    max-width: 1100px !important;
+    padding: 10px 24px !important;
+  }
+
+  .tv-mode [data-tv-bottom-nav] button {
+    min-width: 150px;
+    min-height: 86px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px !important;
+    padding: 0 12px !important;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .tv-mode [data-tv-bottom-nav] button svg {
+    display: block;
+    flex: none;
+    width: 32px !important;
+    height: 32px !important;
+  }
+
+  .tv-mode [data-tv-bottom-nav] button span {
+    display: block;
+    margin: 0;
+    line-height: 1 !important;
+  }
+
+  .tv-mode [data-tv-bottom-nav] button.text-orange-500 {
+    background: rgb(249 115 22 / 12%);
+  }
+
+  .tv-mode [data-tv-bottom-nav] button.text-orange-500::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    width: 34px;
+    height: 3px;
+    border-radius: 999px;
+    background: #fb923c;
+    transform: translateX(-50%);
+  }
+
+  .tv-mode [data-tv-bottom-nav] button:focus:not(.text-orange-500) {
+    background: rgb(255 255 255 / 6%);
+  }
+
+  .tv-mode .playback-progress-ring--medium {
+    width: 68px !important;
+    height: 68px !important;
+    font-size: 15px !important;
+  }
+
+  .tv-mode .playback-progress-ring--small {
+    width: 54px !important;
+    height: 54px !important;
+    font-size: 14px !important;
+  }
+}
+
+.playback-progress-ring {
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+.playback-progress-ring--small {
+  font-size: 11px !important;
+}
+
+.playback-progress-ring span {
+  font-size: inherit !important;
+  line-height: 1 !important;
 }
 
 @layer utilities {
@@ -43,5 +559,621 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes up-next-crossfade {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+
+@keyframes tv-overlay-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes tv-surface-fade {
+  from { opacity: 0.72; }
+  to { opacity: 1; }
+}
+
+@keyframes nextup-cinema-enter {
+  from {
+    opacity: 0.72;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* NextUp Cinema: a quiet, artwork-led TV presentation. These rules are scoped
+   to the 1080p webOS layout so mobile/web behavior and player mechanics remain
+   unchanged. */
+@media (min-width: 1600px) {
+  .tv-mode {
+    --tv-safe-inline: clamp(64px, 4.167vw, 80px);
+    --tv-safe-block: clamp(48px, 3.125vw, 60px);
+    --cinema-surface: #0a0d14;
+    --cinema-surface-raised: #10141e;
+    --cinema-border: rgb(255 255 255 / 10%);
+    --cinema-muted: #a3aab8;
+  }
+
+  .tv-mode body,
+  .tv-mode #root,
+  .tv-mode .nextup-cinema {
+    background-color: #03050a !important;
+  }
+
+  .tv-mode .nextup-cinema {
+    background-image:
+      radial-gradient(ellipse at 12% -8%, rgb(79 70 229 / 13%), transparent 34%),
+      radial-gradient(ellipse at 92% 18%, rgb(249 115 22 / 6%), transparent 30%) !important;
+    color: #f5f7fb !important;
+  }
+
+  .tv-mode .nextup-cinema > [data-tv-app-header] {
+    background: linear-gradient(180deg, rgb(3 5 10 / 98%), rgb(3 5 10 / 88%)) !important;
+    border-bottom: 0 !important;
+    padding-inline: var(--tv-safe-inline) !important;
+  }
+
+  .tv-mode [data-tv-app-header] [data-tv-brand-mark] {
+    width: 44px !important;
+    height: 44px !important;
+    border: 1px solid rgb(255 255 255 / 12%);
+    border-radius: 15px !important;
+    box-shadow: 0 10px 28px rgb(249 115 22 / 24%) !important;
+  }
+
+  .tv-mode [data-tv-app-header] h1 {
+    font-size: 27px !important;
+    line-height: 1 !important;
+    letter-spacing: -0.025em !important;
+  }
+
+  .tv-mode [data-tv-app-header] [data-tv-brand-tagline] {
+    display: none !important;
+  }
+
+  .tv-mode .nextup-cinema > [data-tv-main] {
+    padding-top: 34px !important;
+  }
+
+  .tv-mode .nextup-cinema main > div.animate-in {
+    animation: nextup-cinema-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both !important;
+  }
+
+  .tv-mode .nextup-cinema main h2 {
+    color: #f7f8fb !important;
+    font-size: 48px !important;
+    font-weight: 650 !important;
+    line-height: 1.02 !important;
+    letter-spacing: -0.035em !important;
+  }
+
+  .tv-mode .nextup-cinema main h2 + p,
+  .tv-mode .nextup-cinema main h3 + p {
+    color: var(--cinema-muted) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-card] {
+    border-color: transparent !important;
+    background-color: var(--cinema-surface) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-poster-card][data-tv-card] {
+    border-radius: 22px !important;
+    box-shadow: 0 16px 36px rgb(0 0 0 / 34%) !important;
+    transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 160ms ease !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-poster-card][data-tv-card]:focus-within {
+    border-color: transparent !important;
+    transform: translateY(-6px) scale(1.018) !important;
+    box-shadow: 0 24px 52px rgb(0 0 0 / 52%), 0 0 36px rgb(249 115 22 / 14%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-card]::after {
+    box-shadow: inset 0 0 0 4px transparent, inset 0 0 0 8px transparent;
+    transition: opacity 140ms ease, box-shadow 140ms ease;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-card]:focus-within::after {
+    box-shadow: inset 0 0 0 4px #fb923c, inset 0 0 0 8px rgb(249 115 22 / 25%);
+  }
+
+  .tv-mode .nextup-cinema [data-tv-poster-card][data-tv-card] img {
+    opacity: 0.9 !important;
+    filter: saturate(0.94) brightness(0.96);
+  }
+
+  .tv-mode .nextup-cinema [data-tv-poster-card][data-tv-card]:focus-within img {
+    opacity: 1 !important;
+    filter: saturate(1.08) brightness(1.05);
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="true"] [data-tv-row] {
+    gap: 24px !important;
+    padding-top: 6px;
+    padding-bottom: 22px !important;
+  }
+
+  /* Let artwork rails begin on the content grid but continue all the way to
+     the physical right edge. The very light shade preserves the artwork at
+     the edge so the partial card reads as continuing off-screen. */
+  .tv-mode .nextup-cinema [data-tv-section="true"] [data-tv-edge-rail-shell] {
+    margin-right: calc(50% - 50vw);
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="true"] [data-tv-edge-rail-track] {
+    box-sizing: border-box;
+    scroll-padding-right: var(--tv-safe-inline);
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="true"] [data-tv-edge-rail-track]::after {
+    content: "";
+    flex: 0 0 var(--tv-safe-inline);
+    align-self: stretch;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="true"] [data-tv-edge-rail-shell]::after {
+    content: "";
+    position: absolute;
+    z-index: 40;
+    top: 0;
+    right: 0;
+    bottom: 22px;
+    width: 48px;
+    background: linear-gradient(90deg, transparent 0%, rgb(3 5 10 / 18%) 100%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="true"] [data-tv-edge-rail-shell][data-tv-rail-has-next="true"]::after {
+    opacity: 1;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="true"] > div:first-child {
+    margin-bottom: 18px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="true"] h3 {
+    color: #f2f4f8 !important;
+    font-size: 28px !important;
+    font-weight: 620 !important;
+    letter-spacing: -0.02em !important;
+  }
+
+  /* Large hero: same dimensions, quieter information hierarchy. */
+  .tv-mode .nextup-cinema [data-tv-up-next-screen] > .tv-up-next-heading {
+    min-height: 54px;
+    gap: 18px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-screen] > .tv-up-next-heading h2 {
+    font-size: 46px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-screen] > .tv-up-next-heading p {
+    color: #8f97a7 !important;
+    font-size: 20px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-stage] {
+    gap: 28px !important;
+    position: relative;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-stage]:has([data-tv-up-next-rail])::after {
+    content: "";
+    position: absolute;
+    z-index: 45;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 48px;
+    background: linear-gradient(90deg, transparent 0%, rgb(3 5 10 / 18%) 100%);
+    pointer-events: none;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-hero] {
+    border-color: transparent !important;
+    border-radius: 32px !important;
+    box-shadow: 0 28px 64px rgb(0 0 0 / 48%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-hero]:focus-within {
+    border-color: transparent !important;
+    box-shadow: 0 30px 72px rgb(0 0 0 / 56%), 0 0 42px rgb(249 115 22 / 12%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-hero-side-gradient] {
+    background: linear-gradient(90deg, rgb(2 4 9 / 96%) 0%, rgb(2 4 9 / 82%) 38%, rgb(2 4 9 / 20%) 76%, transparent 100%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-hero-floor-gradient] {
+    background: linear-gradient(0deg, rgb(2 4 9 / 94%) 0%, rgb(2 4 9 / 18%) 54%, transparent 82%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-hero-copy] {
+    max-width: 86% !important;
+    padding: 44px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-hero-eyebrow] {
+    border: 1px solid rgb(251 146 60 / 30%);
+    border-radius: 999px !important;
+    background: rgb(2 6 23 / 74%) !important;
+    color: #fdba74 !important;
+    font-size: 17px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.09em !important;
+    padding: 8px 14px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-hero-copy] h3 {
+    color: #fff !important;
+    font-size: clamp(52px, 3.08vw, 60px) !important;
+    font-weight: 650 !important;
+    line-height: 0.98 !important;
+    letter-spacing: -0.045em !important;
+    margin-bottom: 14px !important;
+    text-shadow: 0 4px 22px rgb(0 0 0 / 65%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-hero-copy] > p {
+    color: #eef1f6 !important;
+    font-size: 24px !important;
+    font-weight: 550 !important;
+    line-height: 1.25 !important;
+    margin-bottom: 14px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-hero-meta] {
+    color: #b5bdca !important;
+    gap: 0 !important;
+    font-size: 20px !important;
+    margin-bottom: 18px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-hero-meta] > span:not(:last-child)::after {
+    content: "·";
+    color: rgb(255 255 255 / 34%);
+    margin-inline: 12px;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-hero-action] {
+    min-height: 62px;
+    min-width: 190px;
+    border: 1px solid rgb(255 255 255 / 16%);
+    border-radius: 999px !important;
+    background: #fb923c !important;
+    color: #190a02 !important;
+    font-size: 22px !important;
+    box-shadow: 0 12px 28px rgb(249 115 22 / 24%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-hero-content] {
+    animation-duration: 220ms !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-rail] {
+    gap: 24px !important;
+    padding-top: 2px;
+    scroll-padding-right: var(--tv-safe-inline);
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-rail]::after {
+    content: "";
+    flex: 0 0 var(--tv-safe-inline);
+    align-self: stretch;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-thumbnail] {
+    height: 80% !important;
+    border-color: transparent !important;
+    border-radius: 24px !important;
+    background: var(--cinema-surface) !important;
+    box-shadow: 0 18px 42px rgb(0 0 0 / 38%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-thumbnail] img {
+    opacity: 0.88 !important;
+    filter: saturate(0.92) brightness(0.94);
+  }
+
+  .tv-mode .nextup-cinema [data-tv-up-next-thumbnail] > div:last-child {
+    padding: 22px !important;
+  }
+
+  /* Library controls become one restrained segmented control system. */
+  .tv-mode .nextup-cinema [data-tv-section="library-controls"] {
+    margin-bottom: 34px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="library-controls"] [data-tv-row] {
+    gap: 10px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="library-controls"] button {
+    min-height: 54px !important;
+    border: 1px solid rgb(255 255 255 / 10%) !important;
+    border-radius: 999px !important;
+    background: rgb(255 255 255 / 4%) !important;
+    color: #c3c9d3 !important;
+    padding-inline: 20px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="library-controls"] button[aria-pressed="true"] {
+    border-color: rgb(251 146 60 / 48%) !important;
+    background: rgb(249 115 22 / 16%) !important;
+    color: #fed7aa !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-section="library-controls"] input {
+    width: 320px !important;
+    min-height: 54px !important;
+    border: 1px solid rgb(255 255 255 / 10%) !important;
+    border-radius: 999px !important;
+    background: rgb(255 255 255 / 4%) !important;
+    color: #f4f6fa !important;
+    padding-inline: 20px !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-library-status] {
+    width: fit-content;
+    max-width: 100%;
+    border: 1px solid rgb(251 146 60 / 20%);
+    border-radius: 999px;
+    background: rgb(2 6 23 / 72%);
+    color: #fdba74 !important;
+    line-height: 1.15 !important;
+    padding: 7px 10px;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-watch-stats] {
+    border-color: var(--cinema-border) !important;
+    background: rgb(255 255 255 / 3%) !important;
+    box-shadow: none !important;
+  }
+
+  /* Coming uses open list surfaces instead of stacked bordered panels. */
+  .tv-mode .nextup-cinema [data-tv-cinema-list-card] {
+    min-height: 190px;
+    border: 1px solid var(--cinema-border) !important;
+    border-radius: 22px !important;
+    background: rgb(255 255 255 / 3.5%) !important;
+    padding: 18px 20px !important;
+    transition: transform 150ms ease, background-color 150ms ease, box-shadow 150ms ease !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-cinema-list-card]:focus-within {
+    background: rgb(255 255 255 / 6%) !important;
+    transform: translateY(-3px);
+    box-shadow: 0 18px 42px rgb(0 0 0 / 30%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-cinema-list-card] img {
+    border-radius: 14px;
+  }
+
+  /* A floating dock replaces the full-width navigation bar while retaining
+     every existing focus target and label. */
+  .tv-mode .nextup-cinema > [data-tv-bottom-nav-shell] {
+    bottom: 14px !important;
+    background: transparent !important;
+    border: 0 !important;
+    padding: 0 !important;
+    pointer-events: none;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-bottom-nav] {
+    width: min(1040px, calc(100vw - 160px));
+    max-width: 1040px !important;
+    min-height: 92px;
+    border: 1px solid rgb(255 255 255 / 11%);
+    border-radius: 30px;
+    background: rgb(8 11 18 / 96%);
+    box-shadow: 0 22px 58px rgb(0 0 0 / 54%) !important;
+    padding: 8px 16px !important;
+    pointer-events: auto;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-bottom-nav] button {
+    min-width: 160px;
+    min-height: 74px;
+    border-radius: 22px !important;
+    color: #8f97a7 !important;
+    transition: transform 140ms ease, color 140ms ease, background-color 140ms ease, box-shadow 140ms ease !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-bottom-nav] button svg {
+    width: 29px !important;
+    height: 29px !important;
+    stroke-width: 1.9;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-bottom-nav] button span {
+    color: inherit;
+    font-size: 18px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0 !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-bottom-nav] button.text-orange-500 {
+    background: rgb(249 115 22 / 13%) !important;
+    color: #fdba74 !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-bottom-nav] button.text-orange-500::after {
+    top: auto;
+    bottom: 5px;
+    width: 26px;
+    height: 4px;
+    background: #fb923c;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-bottom-nav] button:focus {
+    background: rgb(255 255 255 / 9%) !important;
+    color: #fff !important;
+    transform: translateY(-3px) scale(1.025);
+    box-shadow: 0 0 0 4px #fb923c, 0 0 0 8px rgb(249 115 22 / 24%), 0 14px 30px rgb(0 0 0 / 38%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-modal-overlay] {
+    background: rgb(0 0 0 / 78%) !important;
+  }
+
+  .tv-mode .nextup-cinema [data-tv-modal-surface] {
+    border: 1px solid var(--cinema-border) !important;
+    border-radius: 28px !important;
+    background: #0a0d14 !important;
+    box-shadow: 0 30px 90px rgb(0 0 0 / 62%) !important;
+  }
+
+  .tv-mode .nextup-cinema :is([class*="transition-"], [class*="duration-"]) {
+    transition-duration: 150ms !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-mode .nextup-cinema main > div.animate-in {
+    animation: none !important;
+  }
+
+  .tv-mode [data-tv-up-next-hero-content] {
+    animation: none;
+  }
+
+  .tv-mode [data-tv-card] img,
+  .tv-mode [data-tv-card]:focus-within img {
+    transform: none;
+    transition: none !important;
+  }
+
+  .tv-mode [data-tv-modal-overlay],
+  .tv-mode [data-tv-modal-surface] {
+    animation: none !important;
+  }
+
+  .tv-mode [aria-label="Video player"] [class*="transition-opacity"] {
+    transition: none !important;
+  }
+}
+
+/* Phone edition: preserve the v1.0.59 feature set while making every primary
+   action reachable on narrow touch screens and around iPhone safe areas. */
+@media (max-width: 767px) {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    min-height: 100dvh;
+  }
+
+  body {
+    overscroll-behavior-y: none;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+
+  /* Prevent Safari from zooming the whole page when a compact settings field
+     receives focus. */
+  input:not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  .nextup-cinema main h2 {
+    font-size: 1.875rem;
+    line-height: 1.08;
+  }
+
+  [data-phone-up-next-thumbnail] {
+    flex: 0 0 min(72vw, 17rem) !important;
+    min-width: min(72vw, 17rem) !important;
+  }
+
+  [data-phone-player] video::cue {
+    color: #fff;
+    background: rgb(2 6 23 / 86%);
+    font-size: 18px;
+    font-weight: 650;
+    line-height: 1.3;
+    text-shadow: 0 1px 3px rgb(0 0 0 / 95%);
+  }
+
+  [data-phone-player] input[type="range"] {
+    min-height: 32px;
+  }
+
+  [data-phone-player-quick-actions] {
+    max-width: calc(100vw - 5rem - env(safe-area-inset-left) - env(safe-area-inset-right));
+  }
+
+  [data-phone-player-actions] > button {
+    max-width: 5rem;
+  }
+}
+
+@media (min-width: 768px) {
+  [data-phone-up-next-thumbnail] {
+    flex: 0 0 var(--phone-thumbnail-basis) !important;
+    min-width: var(--phone-thumbnail-basis) !important;
+  }
+}
+
+/* Compact landscape is the hardest iPhone player layout: keep the movie clear,
+   shrink chrome, and leave captions/seek/next controls touchable. */
+@media (max-height: 520px) and (orientation: landscape) {
+  [data-phone-player-header] > div > h2,
+  [data-phone-player-header] > div > p {
+    display: none;
+  }
+
+  [data-phone-player-quick-actions] {
+    margin-top: 0 !important;
+  }
+
+  [data-phone-player-controls] {
+    padding-top: 2rem !important;
+    padding-bottom: calc(0.4rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  [data-phone-player-controls] > div > div:first-child {
+    margin-bottom: 0.25rem !important;
+  }
+
+  [data-phone-player-actions] > button {
+    min-height: 42px !important;
+    padding-top: 0.35rem !important;
+    padding-bottom: 0.35rem !important;
+  }
+
+  [data-phone-skip-card],
+  [data-phone-credits-card],
+  [data-phone-credits-alternatives] {
+    bottom: calc(4.75rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  [data-phone-credits-card] > div {
+    max-height: calc(100dvh - 6rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+
+  [data-phone-episode-ended] > div {
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
   }
 }

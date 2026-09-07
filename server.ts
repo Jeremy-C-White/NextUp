@@ -18,17 +18,33 @@ async function startServer() {
     if (!targetUrl) {
       return res.status(400).json({ error: "Missing url parameter" });
     }
+
+    let parsedTarget: URL;
+    try {
+      parsedTarget = new URL(targetUrl);
+    } catch {
+      return res.status(400).json({ error: "Invalid stream-provider URL" });
+    }
+    if (parsedTarget.protocol !== "https:" && parsedTarget.hostname !== "localhost" && parsedTarget.hostname !== "127.0.0.1") {
+      return res.status(400).json({ error: "Stream-provider URL must use HTTPS" });
+    }
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 135000);
-      
-      req.on('close', () => {
+
+      // `request.close` also fires after a normal request body completes on
+      // modern Node versions, which used to cancel nearly every provider call.
+      req.on('aborted', () => {
         controller.abort();
+      });
+      res.on('close', () => {
+        if (!res.writableEnded) controller.abort();
       });
 
       let resp;
       try {
-        resp = await fetch(targetUrl, {
+        resp = await fetch(parsedTarget, {
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",

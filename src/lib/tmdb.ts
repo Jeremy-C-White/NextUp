@@ -4,12 +4,82 @@ import { getCached as apiGetCached, setCached as apiSetCached } from "./apiCache
 function getCached<T>(key: string) { return apiGetCached<T>("tmdb", "legacy", [key]); }
 function setCached<T>(key: string, data: T, ttl = 60) { apiSetCached<T>("tmdb", "legacy", [key], data, ttl); }
 import { fetchJson } from "./httpClient";
+import { findReleasedDigitalDate } from "./movieRelease";
 
 const BASE_URL = "https://api.themoviedb.org/3";
-const API_KEY = (import.meta as any).env.VITE_TMDB_API_KEY || (import.meta as any).env.TMDB_API_KEY;
+const INLINE_TMDB_API_KEY = "a333c3f3e191efa5f618f63969abdaa0";
+const BUILD_API_KEY = (import.meta as any).env.VITE_TMDB_API_KEY || (import.meta as any).env.TMDB_API_KEY || "";
+
+export function getTMDBApiKey(): string {
+  if (typeof window !== "undefined") {
+    const saved = window.localStorage.getItem("tmdb_api_key")?.trim();
+    if (saved) return saved;
+  }
+  return String(BUILD_API_KEY || INLINE_TMDB_API_KEY).trim();
+}
+
+export function saveTMDBApiKey(value: string): void {
+  if (typeof window === "undefined") return;
+  const normalized = value.trim();
+  if (normalized) window.localStorage.setItem("tmdb_api_key", normalized);
+  else window.localStorage.removeItem("tmdb_api_key");
+}
+
+const TMDB_TV_GENRES: Record<number, string[]> = {
+  10759: ["Action", "Adventure"],
+  16: ["Animation"],
+  35: ["Comedy"],
+  80: ["Crime"],
+  99: ["Documentary"],
+  18: ["Drama"],
+  10751: ["Family"],
+  10762: ["Children"],
+  9648: ["Mystery"],
+  10764: ["Reality"],
+  10765: ["Science-Fiction", "Fantasy"],
+  10766: ["Soap"],
+  10768: ["War", "Politics"],
+  37: ["Western"]
+};
+
+const TMDB_MOVIE_GENRES: Record<number, string[]> = {
+  28: ["Action"],
+  12: ["Adventure"],
+  16: ["Animation"],
+  35: ["Comedy"],
+  80: ["Crime"],
+  99: ["Documentary"],
+  18: ["Drama"],
+  10751: ["Family"],
+  14: ["Fantasy"],
+  36: ["History"],
+  27: ["Horror"],
+  10402: ["Music"],
+  9648: ["Mystery"],
+  10749: ["Romance"],
+  878: ["Science-Fiction"],
+  10770: ["TV Movie"],
+  53: ["Thriller"],
+  10752: ["War"],
+  37: ["Western"]
+};
+
+function getTMDBGenreNames(genreIds: unknown, isMovie: boolean): string[] {
+  if (!Array.isArray(genreIds)) return [];
+  const genreMap = isMovie ? TMDB_MOVIE_GENRES : TMDB_TV_GENRES;
+  return Array.from(new Set(
+    genreIds.flatMap(id => genreMap[Number(id)] || [])
+  ));
+}
+
 export async function fetchTMDB(endpoint: string, params: Record<string, string> = {}, signal?: AbortSignal) {
+  const apiKey = getTMDBApiKey();
+  if (!apiKey) {
+    throw new Error("TMDB API key is not configured. Open Settings and add your TMDB API key.");
+  }
+
   const url = new URL(`${BASE_URL}${endpoint}`);
-  url.searchParams.append('api_key', API_KEY);
+  url.searchParams.append('api_key', apiKey);
   Object.entries(params).forEach(([k, v]) => url.searchParams.append(k, v));
   
   return fetchJson<any>(url.toString(), { signal, concurrencyGroup: "tmdb", timeoutMs: 15000, retries: 2 });
@@ -22,11 +92,12 @@ function enrichTMDBShow(tmdbShow: any): Show {
     id: -tmdbShow.id, // Negative indicates TMDB sourced
     name: tmdbShow.name || tmdbShow.original_name,
     image: {
-      medium: tmdbShow.poster_path ? `https://image.tmdb.org/t/p/w342${tmdbShow.poster_path}` : "",
-      original: tmdbShow.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbShow.backdrop_path}` : ""
+      medium: tmdbShow.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbShow.poster_path}` : "",
+      original: tmdbShow.backdrop_path ? `https://image.tmdb.org/t/p/w1280${tmdbShow.backdrop_path}` : ""
     },
     summary: tmdbShow.overview,
     premiered: tmdbShow.first_air_date,
+    genres: getTMDBGenreNames(tmdbShow.genre_ids, false),
     vote_average: tmdbShow.vote_average,
     _tmdbId: tmdbShow.id
   } as any;
@@ -34,7 +105,7 @@ function enrichTMDBShow(tmdbShow: any): Show {
 
 
 export async function getTrendingMoviesTMDB(): Promise<Show[]> {
-  const cacheKey = 'tmdb_trending_movies_streaming';
+  const cacheKey = 'tmdb_trending_movies_streaming_v2';
   const cached = getCached<Show[]>(cacheKey);
   if (cached) return cached;
   
@@ -54,7 +125,7 @@ export async function getTrendingMoviesTMDB(): Promise<Show[]> {
 }
 
 export async function getTrendingTMDB(): Promise<Show[]> {
-  const cacheKey = 'tmdb_trending';
+  const cacheKey = 'tmdb_trending_v2';
   const cached = getCached<Show[]>(cacheKey);
   if (cached) return cached;
   
@@ -65,7 +136,7 @@ export async function getTrendingTMDB(): Promise<Show[]> {
 }
 
 export async function getHiddenGemsTMDB(): Promise<Show[]> {
-  const cacheKey = 'tmdb_hidden_gems';
+  const cacheKey = 'tmdb_hidden_gems_v2';
   const cached = getCached<Show[]>(cacheKey);
   if (cached) return cached;
   
@@ -83,7 +154,7 @@ export async function getHiddenGemsTMDB(): Promise<Show[]> {
 }
 
 export async function getForYouTMDB(): Promise<Show[]> {
-  const cacheKey = 'tmdb_foryou';
+  const cacheKey = 'tmdb_foryou_v2';
   const cached = getCached<Show[]>(cacheKey);
   if (cached) return cached;
   
@@ -189,7 +260,7 @@ export async function getWatchProviders(tmdbId: number, isMovie = false): Promis
 }
 
 export async function getTopShowsByNetwork(networkId: number): Promise<Show[]> {
-  const cacheKey = `tmdb_network_combined_${networkId}`;
+  const cacheKey = `tmdb_network_combined_v2_${networkId}`;
   const cached = getCached<Show[]>(cacheKey);
   if (cached) return cached;
   
@@ -245,13 +316,36 @@ export async function getTopShowsByNetwork(networkId: number): Promise<Show[]> {
   }
 }
 
+async function getReleasedDigitalMovieDate(tmdbId: number, signal?: AbortSignal): Promise<string | null> {
+  const cacheKey = `tmdb_digital_release_us_${tmdbId}`;
+  const cached = getCached<{ releaseDate: string | null }>(cacheKey);
+  if (cached) return cached.releaseDate;
+
+  const data = await fetchTMDB(`/movie/${tmdbId}/release_dates`, {}, signal);
+  const releaseDate = findReleasedDigitalDate(data, "US");
+  setCached(cacheKey, { releaseDate }, 24 * 60);
+  return releaseDate;
+}
+
 export async function searchMultiTMDB(query: string, signal?: AbortSignal): Promise<Show[]> {
-  const cacheKey = `tmdb_search_${query}`;
+  const cacheKey = `tmdb_search_digital_us_${query}`;
   const cached = getCached<Show[]>(cacheKey);
   if (cached) return cached;
   
   const data = await fetchTMDB('/search/multi', { query, include_adult: 'false' }, signal);
-  const results = data.results.filter((r: any) => r.media_type === 'tv' || r.media_type === 'movie').slice(0, 10);
+  const candidates = data.results.filter((result: any) => result.media_type === 'tv' || result.media_type === 'movie');
+  const checkedResults = await Promise.all(candidates.map(async (result: any) => {
+    if (result.media_type === 'tv') return result;
+    try {
+      const digitalReleaseDate = await getReleasedDigitalMovieDate(result.id, signal);
+      return digitalReleaseDate ? { ...result, digital_release_date: digitalReleaseDate } : null;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      console.warn("Could not confirm digital movie release", result.id, error);
+      return null;
+    }
+  }));
+  const results = checkedResults.filter(Boolean).slice(0, 10);
   
   const shows = results.map((r: any) => {
     if (r.media_type === 'tv') {
@@ -285,16 +379,49 @@ export async function getTMDBExternalIds(tmdbId: number, isMovie: boolean): Prom
   }
 }
 
+export interface TMDBMovieDetails {
+  runtime?: number;
+  genres: string[];
+  voteAverage?: number;
+  releaseDate?: string;
+  status?: string;
+  homepage?: string;
+  imdbId?: string;
+}
+
+export async function getTMDBMovieDetails(tmdbId: number): Promise<TMDBMovieDetails> {
+  const cacheKey = `tmdb_movie_details_${tmdbId}`;
+  const cached = getCached<TMDBMovieDetails>(cacheKey);
+  if (cached) return cached;
+
+  const data = await fetchTMDB(`/movie/${tmdbId}`);
+  const details: TMDBMovieDetails = {
+    runtime: typeof data.runtime === "number" && data.runtime > 0 ? data.runtime : undefined,
+    genres: Array.isArray(data.genres)
+      ? data.genres.map((genre: any) => String(genre?.name || "").trim()).filter(Boolean)
+      : [],
+    voteAverage: typeof data.vote_average === "number" && data.vote_average > 0 ? data.vote_average : undefined,
+    releaseDate: typeof data.release_date === "string" ? data.release_date : undefined,
+    status: typeof data.status === "string" ? data.status : undefined,
+    homepage: typeof data.homepage === "string" && data.homepage.trim() ? data.homepage : undefined,
+    imdbId: typeof data.imdb_id === "string" && data.imdb_id.trim() ? data.imdb_id : undefined
+  };
+
+  setCached(cacheKey, details, 24 * 60);
+  return details;
+}
+
 function enrichTMDBMovie(tmdbMovie: any): Show {
   return {
     id: -tmdbMovie.id - 1000000000, // Make it very negative to distinguish movie from TV
     name: tmdbMovie.title || tmdbMovie.original_title,
     image: {
-      medium: tmdbMovie.poster_path ? `https://image.tmdb.org/t/p/w342${tmdbMovie.poster_path}` : "",
-      original: tmdbMovie.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbMovie.backdrop_path}` : ""
+      medium: tmdbMovie.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbMovie.poster_path}` : "",
+      original: tmdbMovie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${tmdbMovie.backdrop_path}` : ""
     },
     summary: tmdbMovie.overview,
     premiered: tmdbMovie.release_date,
+    genres: getTMDBGenreNames(tmdbMovie.genre_ids, true),
     status: 'Ended', // Movies are ended
     vote_average: tmdbMovie.vote_average,
     _tmdbId: tmdbMovie.id,

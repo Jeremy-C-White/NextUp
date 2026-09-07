@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { UserShow } from '../types';
-import { Download, Upload, X, CheckCircle2, AlertCircle, Bell, BellRing, Smartphone, Server } from 'lucide-react';
+import { Download, Upload, X, CheckCircle2, AlertCircle, Bell, BellRing, Smartphone, Server, Captions, Music2 } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { writeBatch, doc } from 'firebase/firestore';
 import { 
@@ -13,9 +13,29 @@ import {
   isIOS, 
   isStandalonePWA 
 } from '../lib/notifications';
-import { getAioStreamsBaseUrl } from '../lib/debrid';
+import { fetchThroughProxy } from '../lib/webos';
+import { getTMDBApiKey, saveTMDBApiKey } from '../lib/tmdb';
+import {
+  getOpenSubtitlesApiKey,
+  saveOpenSubtitlesApiKey,
+  testOpenSubtitlesApiKey
+} from '../lib/externalSubtitles';
 
-export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onClose: () => void, shows: UserShow[] }) {
+interface SettingsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  shows: UserShow[];
+  themeMusicEnabled: boolean;
+  onThemeMusicEnabledChange: (enabled: boolean) => void;
+}
+
+export function SettingsModal({
+  isOpen,
+  onClose,
+  shows,
+  themeMusicEnabled,
+  onThemeMusicEnabledChange
+}: SettingsModalProps) {
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [error, setError] = useState('');
@@ -25,6 +45,10 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
 
   const [aiostreamsUrl, setAiostreamsUrl] = useState('');
   const [aiostreamsSaved, setAiostreamsSaved] = useState(false);
+  const [tmdbApiKey, setTmdbApiKey] = useState('');
+  const [tmdbStatus, setTmdbStatus] = useState<{ type: 'idle' | 'success' | 'error', message: string }>({ type: 'idle', message: '' });
+  const [openSubtitlesApiKey, setOpenSubtitlesApiKey] = useState('');
+  const [openSubtitlesStatus, setOpenSubtitlesStatus] = useState<{ type: 'idle' | 'success' | 'error', message: string }>({ type: 'idle', message: '' });
 
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">('default');
   const [notifEnabled, setNotifEnabled] = useState(false);
@@ -39,6 +63,8 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
       setNotifEnabled(areNotificationsEnabled());
       
       const currentUrl = localStorage.getItem("aiostreams_base_url") || "";
+      setTmdbApiKey(getTMDBApiKey());
+      setOpenSubtitlesApiKey(getOpenSubtitlesApiKey());
       const envUrl = (import.meta as any).env?.VITE_AIOSTREAMS_BASE_URL?.trim();
       
       if (currentUrl && envUrl) {
@@ -69,8 +95,7 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
         const manifestUrl = normalized + "/manifest.json";
         
         try {
-          const proxyUrl = `/api/debrid/stream?url=${encodeURIComponent(manifestUrl)}`;
-          const resp = await fetch(proxyUrl);
+          const resp = await fetchThroughProxy(manifestUrl);
           
           if (!resp.ok) {
             throw new Error(`Provider manifest unreachable (HTTP ${resp.status})`);
@@ -96,6 +121,55 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
         setAiostreamsSaved(true);
         setTimeout(() => setAiostreamsSaved(false), 2500);
       }
+    }
+  };
+
+  const handleSaveTmdbApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = tmdbApiKey.trim();
+    setTmdbStatus({ type: 'idle', message: '' });
+
+    if (!key) {
+      saveTMDBApiKey('');
+      setTmdbStatus({ type: 'success', message: 'TMDB API key cleared.' });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const url = new URL('https://api.themoviedb.org/3/configuration');
+      url.searchParams.set('api_key', key);
+      const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`TMDB rejected this key (HTTP ${response.status}).`);
+      saveTMDBApiKey(key);
+      setTmdbStatus({ type: 'success', message: 'TMDB API key saved and verified.' });
+    } catch (err: any) {
+      setTmdbStatus({ type: 'error', message: err.message || 'Could not verify the TMDB API key.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveOpenSubtitlesApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = openSubtitlesApiKey.trim();
+    setOpenSubtitlesStatus({ type: 'idle', message: '' });
+
+    if (!key) {
+      saveOpenSubtitlesApiKey('');
+      setOpenSubtitlesStatus({ type: 'success', message: 'Built-in OpenSubtitles access restored.' });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await testOpenSubtitlesApiKey(key);
+      saveOpenSubtitlesApiKey(key);
+      setOpenSubtitlesStatus({ type: 'success', message: 'OpenSubtitles key saved and verified.' });
+    } catch (err: any) {
+      setOpenSubtitlesStatus({ type: 'error', message: err.message || 'Could not verify the OpenSubtitles key.' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -253,11 +327,12 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-md p-6 shadow-2xl relative animate-in max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain" onClick={(e) => e.stopPropagation()}>
+    <div data-tv-modal-overlay="settings" className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={onClose}>
+      <div data-tv-modal-surface="settings" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-none sm:rounded-3xl w-full max-w-md h-dvh sm:h-auto p-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:p-6 shadow-2xl relative animate-in max-h-dvh sm:max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain" onClick={(e) => e.stopPropagation()}>
         <button 
           onClick={onClose}
-          className="absolute right-4 top-4 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          aria-label="Close settings"
+          className="absolute right-[calc(0.75rem+env(safe-area-inset-right))] top-[calc(0.75rem+env(safe-area-inset-top))] sm:right-4 sm:top-4 min-h-11 min-w-11 flex items-center justify-center rounded-full text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white"
         >
           <X className="w-6 h-6" />
         </button>
@@ -305,6 +380,102 @@ export function SettingsModal({ isOpen, onClose, shows }: { isOpen: boolean, onC
             {loading ? "Updating..." : "Update PIN"}
           </button>
         </form>
+
+        <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Music2 className="w-5 h-5 text-orange-500" />
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">Up Next Theme Music</h3>
+            </div>
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+              themeMusicEnabled
+                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                : 'bg-slate-500/10 text-slate-500 border-slate-500/20'
+            }`}>
+              {themeMusicEnabled ? 'On' : 'Muted'}
+            </span>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 text-sm mb-4">
+            Stay on a series in Up Next for half a second and its short Plex theme will fade in at low volume when available. If iPhone asks for permission, tap Play theme once.
+          </p>
+          <button
+            type="button"
+            onClick={() => onThemeMusicEnabledChange(!themeMusicEnabled)}
+            aria-pressed={themeMusicEnabled}
+            className={`w-full py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+              themeMusicEnabled
+                ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white hover:bg-slate-300 dark:hover:bg-slate-700'
+                : 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/25 active:scale-95'
+            }`}
+          >
+            <Music2 className="w-4 h-4" />
+            {themeMusicEnabled ? 'Mute Theme Music' : 'Enable Theme Music'}
+          </button>
+        </div>
+
+        <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
+          <div className="flex items-center gap-2 mb-2">
+            <Server className="w-5 h-5 text-orange-500" />
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white">TMDB API Key</h3>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 text-sm mb-3">
+            Required for movie and show search, artwork, and recommendations. Create a free API key at themoviedb.org.
+          </p>
+          <form onSubmit={handleSaveTmdbApiKey} className="space-y-3">
+            <input
+              type="password"
+              value={tmdbApiKey}
+              onChange={(e) => setTmdbApiKey(e.target.value)}
+              placeholder="Paste your TMDB API key"
+              autoComplete="off"
+              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl py-2.5 px-3.5 text-slate-900 dark:text-white text-xs font-mono focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
+            />
+            {tmdbStatus.message && (
+              <p className={`text-xs font-medium ${tmdbStatus.type === 'error' ? 'text-red-500' : 'text-emerald-500'}`}>
+                {tmdbStatus.message}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-orange-500/50 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition-all shadow-md shadow-orange-500/20"
+            >
+              {loading ? 'Verifying...' : 'Save TMDB Key'}
+            </button>
+          </form>
+        </div>
+
+        <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
+          <div className="flex items-center gap-2 mb-2">
+            <Captions className="w-5 h-5 text-orange-500" />
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white">Online English Captions</h3>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 text-sm mb-3">
+            Built-in OpenSubtitles access is active. Video starts immediately; NextUp only searches in the background when the selected source has no embedded English captions.
+          </p>
+          <form onSubmit={handleSaveOpenSubtitlesApiKey} className="space-y-3">
+            <input
+              type="password"
+              value={openSubtitlesApiKey}
+              onChange={(e) => setOpenSubtitlesApiKey(e.target.value)}
+              placeholder="Paste your OpenSubtitles API key"
+              autoComplete="off"
+              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl py-2.5 px-3.5 text-slate-900 dark:text-white text-xs font-mono focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
+            />
+            {openSubtitlesStatus.message && (
+              <p className={`text-xs font-medium ${openSubtitlesStatus.type === 'error' ? 'text-red-500' : 'text-emerald-500'}`}>
+                {openSubtitlesStatus.message}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-orange-500/50 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition-all shadow-md shadow-orange-500/20"
+            >
+              {loading ? 'Verifying...' : 'Save OpenSubtitles Key'}
+            </button>
+          </form>
+        </div>
 
         <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
           <div className="flex items-center gap-2 mb-2">
