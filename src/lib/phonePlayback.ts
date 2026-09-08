@@ -91,7 +91,7 @@ export function selectVlcFallbackCandidates(
  */
 export function selectPhonePlaybackCandidates(
   rankedCandidates: PlaybackCandidate[],
-  maximum: number = 6
+  maximum: number = Number.POSITIVE_INFINITY
 ): PlaybackCandidate[] {
   const eligible = rankedCandidates.filter(candidate =>
     candidate.container === "web-compatible" || candidate.container === "web-probe"

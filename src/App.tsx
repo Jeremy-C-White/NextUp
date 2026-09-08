@@ -26,7 +26,7 @@ import { getLibraryDocumentIds } from "./lib/libraryIdentity";
 import { checkAndNotifyUpcomingEpisodes } from "./lib/notifications";
 import { getTrendingShows, getPremieringSoon, resolveTVMazeShow, getShow, getTrendingTVMaze, getHiddenGems, getForYou } from "./lib/tvmaze";
 import { getTrendingTMDB, getTrendingMoviesTMDB, getRecommendationsTMDB, getTMDBIdFromIMDB, getTopShowsByNetwork, getHiddenGemsTMDB, getForYouTMDB, getTMDBExternalIds } from "./lib/tmdb";
-import { getBestTorrentioStream, warmAioStreamsConnection } from "./lib/debrid";
+import { getBestAioStreamsSources, warmAioStreamsConnection } from "./lib/debrid";
 import { Tv, Search, LogOut, Settings, CheckCircle2, PlayCircle, Clock, ExternalLink, Compass, X, Calendar, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { calculateProgress, isEpisodeReleased, getEpisodeReleaseTime, getReleasedEpisodes } from "./lib/episodes";
 import { format, isFuture, formatDistanceToNow } from "date-fns";
@@ -674,7 +674,7 @@ const loadWithFallback = async (
     prewarmAbortRef.current?.abort();
     const controller = new AbortController();
     prewarmAbortRef.current = controller;
-    void getBestTorrentioStream(
+    void getBestAioStreamsSources(
       show.imdbId,
       episode.season,
       episode.number,
@@ -781,7 +781,7 @@ const loadWithFallback = async (
   }, [user]);
 
   useEffect(() => {
-    if (!user || !isWebOSTV() || playbackRequest) return;
+    if (!user || playbackRequest) return;
 
     const warmConnection = () => {
       void warmAioStreamsConnection();

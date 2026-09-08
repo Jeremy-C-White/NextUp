@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, TouchEvent as ReactTouchEvent } from "react";
 import { CheckCircle2, Music2, PlayCircle } from "lucide-react";
 import { UserEpisode, UserShow } from "../types";
 import { getEpisodeReleaseTime } from "../lib/episodes";
@@ -7,7 +7,7 @@ import { optimizeArtworkUrl } from "../lib/images";
 import { formatPlaybackPosition } from "../lib/playbackProgress";
 import { formatUpNextAirDate, SmartUpNextItem } from "../lib/upNext";
 import { formatCatchUpDuration } from "../lib/episodeBacklog";
-import { consumeCarouselWheel, createCarouselWheelState } from "../lib/carouselWheel";
+import { consumeCarouselWheel, createCarouselWheelState, getCarouselSwipeDirection } from "../lib/carouselWheel";
 import { getAdjacentCarouselIndexes } from "../lib/carouselPreload";
 import { TvThemePlayer, TvThemePlaybackStatus, TvThemePlayerHandle } from "./TvThemePlayer";
 
@@ -37,10 +37,16 @@ export function UpNextTab({
   const themePlayerRef = useRef<TvThemePlayerHandle>(null);
   const warmTimerRef = useRef<number | null>(null);
   const heroPlayButtonRef = useRef<HTMLButtonElement>(null);
+  const heroTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const heroDragOffsetRef = useRef(0);
+  const blockHeroClickRef = useRef(false);
   const thumbnailRailRef = useRef<HTMLDivElement>(null);
   const carouselWheelStateRef = useRef(createCarouselWheelState());
   const carouselStageCleanupRef = useRef<(() => void) | null>(null);
   const heroArtworkPreloadsRef = useRef(new Map<string, HTMLImageElement>());
+  const [heroDragOffset, setHeroDragOffset] = useState(0);
+  const [heroIsDragging, setHeroIsDragging] = useState(false);
+  const [heroTransitionDirection, setHeroTransitionDirection] = useState<-1 | 0 | 1>(0);
   const safeActiveIndex = items.length > 0 ? Math.min(activeIndex, items.length - 1) : 0;
   const activeItem = items[safeActiveIndex];
   const queueSummary = useMemo(() => {
@@ -136,6 +142,7 @@ export function UpNextTab({
 
   const stepCarousel = useCallback((direction: -1 | 1) => {
     if (items.length <= 1) return;
+    setHeroTransitionDirection(direction);
     setActiveIndex(current => (current + direction + items.length) % items.length);
   }, [items.length]);
 
@@ -176,6 +183,57 @@ export function UpNextTab({
       event.preventDefault();
       stepCarousel(1);
     }
+  };
+
+  const handleHeroTouchStart = (event: ReactTouchEvent<HTMLButtonElement>) => {
+    const touch = event.touches[0];
+    if (!touch || items.length <= 1) return;
+    heroTouchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    heroDragOffsetRef.current = 0;
+    blockHeroClickRef.current = false;
+    setHeroIsDragging(true);
+    setHeroTransitionDirection(0);
+    setHeroDragOffset(0);
+  };
+
+  const handleHeroTouchMove = (event: ReactTouchEvent<HTMLButtonElement>) => {
+    const start = heroTouchStartRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) <= Math.abs(deltaY) || Math.abs(deltaX) < 6) return;
+
+    if (event.cancelable) event.preventDefault();
+    const maximumDrag = Math.max(72, window.innerWidth * 0.28);
+    const offset = Math.max(-maximumDrag, Math.min(maximumDrag, deltaX));
+    heroDragOffsetRef.current = offset;
+    setHeroDragOffset(offset);
+  };
+
+  const finishHeroTouch = () => {
+    const offset = heroDragOffsetRef.current;
+    heroTouchStartRef.current = null;
+    heroDragOffsetRef.current = 0;
+    setHeroIsDragging(false);
+    setHeroDragOffset(0);
+
+    const direction = getCarouselSwipeDirection(offset, 0);
+    if (direction === null) return;
+    blockHeroClickRef.current = true;
+    stepCarousel(direction);
+    window.setTimeout(() => {
+      blockHeroClickRef.current = false;
+    }, 450);
+  };
+
+  const handleHeroPlay = () => {
+    if (blockHeroClickRef.current) {
+      blockHeroClickRef.current = false;
+      return;
+    }
+    if (!activeItem) return;
+    onPlay(activeItem.show, activeItem.nextEp);
   };
 
   const activateFromThumbnail = (index: number) => {
@@ -266,13 +324,27 @@ export function UpNextTab({
                 data-tv-wheel-carousel="true"
                 data-tv-down="#tv-nav-up-next"
                 data-tv-focus-key={`up-next:${show.id}:${nextEp.id}`}
-                className="absolute inset-0 z-30 rounded-[2rem]"
+                className="absolute inset-0 z-30 rounded-[2rem] touch-pan-y"
                 aria-label={`${resumePosition !== null ? `Resume from ${formatPlaybackPosition(resumePosition)}` : "Play"} ${show.name}, ${episodeLabel}`}
                 onKeyDown={handleHeroKeyDown}
-                onClick={() => onPlay(show, nextEp)}
+                onTouchStart={handleHeroTouchStart}
+                onTouchMove={handleHeroTouchMove}
+                onTouchEnd={finishHeroTouch}
+                onTouchCancel={finishHeroTouch}
+                onClick={handleHeroPlay}
               />
 
-              <div key={`${show.id}:${nextEp.id}`} data-tv-up-next-hero-content="true" className="absolute inset-0">
+              <div
+                key={`${show.id}:${nextEp.id}`}
+                data-tv-up-next-hero-content="true"
+                data-phone-hero-swipe={heroTransitionDirection === 1 ? "next" : heroTransitionDirection === -1 ? "previous" : undefined}
+                className={`absolute inset-0 will-change-transform ${heroIsDragging ? "transition-none" : "transition-[transform,opacity] duration-200 ease-out"}`}
+                style={heroDragOffset !== 0 ? {
+                  transform: `translate3d(${heroDragOffset}px, 0, 0)`,
+                  opacity: 1 - Math.min(Math.abs(heroDragOffset) / 500, 0.28)
+                } : undefined}
+                onAnimationEnd={() => setHeroTransitionDirection(0)}
+              >
                 {show.imageUrl ? (
                   <img
                     decoding="async"
@@ -289,6 +361,11 @@ export function UpNextTab({
 
                 <div data-tv-hero-side-gradient="true" className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/75 to-slate-950/10 pointer-events-none" />
                 <div data-tv-hero-floor-gradient="true" className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/25 to-transparent pointer-events-none" />
+                {items.length > 1 && (
+                  <span className="absolute top-4 right-4 z-20 rounded-full bg-black/60 border border-white/10 px-3 py-1.5 text-xs font-bold text-white/85 pointer-events-none">
+                    {safeActiveIndex + 1} / {items.length}
+                  </span>
+                )}
                 <div data-tv-up-next-hero-copy="true" className="relative z-10 h-full p-5 sm:p-7 md:p-9 flex flex-col justify-end max-w-full sm:max-w-[88%] pointer-events-none">
                   <div className="flex flex-wrap items-center gap-3 mb-3">
                     <span data-tv-hero-eyebrow="true" className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">{queueReason}</span>

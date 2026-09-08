@@ -6,12 +6,21 @@ import {
   getStreamCacheState,
   calculateStreamScore,
   getStreamAudioLanguage,
+  normalizeAioStreamsBaseUrl,
   getWebOSTVCompatibility,
   getWebOSTVPreferenceScore,
   StreamOption
 } from './debrid';
 
 const MOVIE = 'movie';
+
+describe('AIOStreams installation URL', () => {
+  test('preserves the private installation path while removing manifest.json', () => {
+    expect(normalizeAioStreamsBaseUrl(
+      'https://aio.example.com/stremio/private-installation/manifest.json'
+    )).toBe('https://aio.example.com/stremio/private-installation');
+  });
+});
 
 describe('Real-Debrid Cache State', () => {
   test('[RD+] cached classification', () => {

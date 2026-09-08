@@ -2,7 +2,7 @@
 
 The phone edition of NextUp: the complete v1.0.59 tracking, discovery, recommendation, resume, and autoplay experience with an MP4-first mobile playback path.
 
-The interface is tuned for iPhone portrait and landscape layouts, including safe areas, touch-sized controls, responsive credits/next-episode cards, native captions, and Safari's explicit-tap audio requirement. Playback tries confirmed H.264/AAC MP4 sources first, automatically checks compatible backups, and offers MKV files through a simple VLC fallback only when browser playback is unavailable. The mobile Next Up screen uses a clear Resume/Play hero and one-tap queue cards without thumbnail progress bars.
+The interface is tuned for iPhone portrait and landscape layouts, including safe areas, touch-sized controls, responsive credits/next-episode cards, native captions, and Safari's explicit-tap audio requirement. Playback asks the configured AIOStreams installation for all enabled addon results, tries confirmed H.264/AAC MP4 sources first, exhausts every browser-compatible backup, and offers MKV files through a simple VLC fallback only when browser playback is unavailable. The mobile Next Up screen uses a finger-tracking swipeable hero, a clear Resume/Play action, and one-tap queue cards without thumbnail progress bars.
 
 ## Prerequisites
 

@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { consumeCarouselWheel, createCarouselWheelState } from "./carouselWheel";
+import { consumeCarouselWheel, createCarouselWheelState, getCarouselSwipeDirection } from "./carouselWheel";
+
+describe("getCarouselSwipeDirection", () => {
+  it("moves with deliberate horizontal phone swipes", () => {
+    expect(getCarouselSwipeDirection(-80, 12)).toBe(1);
+    expect(getCarouselSwipeDirection(80, 12)).toBe(-1);
+  });
+
+  it("leaves vertical scrolling and small taps alone", () => {
+    expect(getCarouselSwipeDirection(35, 4)).toBeNull();
+    expect(getCarouselSwipeDirection(40, 90)).toBeNull();
+  });
+});
 
 describe("consumeCarouselWheel", () => {
   it("moves forward for a vertical wheel-down gesture", () => {

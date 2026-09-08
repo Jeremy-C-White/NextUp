@@ -480,21 +480,21 @@ export function SettingsModal({
         <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
           <div className="flex items-center gap-2 mb-2">
             <Server className="w-5 h-5 text-orange-500" />
-            <h3 className="text-xl font-bold text-slate-900 dark:text-white">Stream Provider (AIOStreams / Torrentio)</h3>
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white">AIOStreams Source Hub</h3>
           </div>
           <p className="text-slate-600 dark:text-slate-400 text-sm mb-3">
-            Configure your custom Stremio addon or AIOStreams manifest URL (e.g., Real-Debrid, Torrentio, or private AIOStreams instance).
+            Use the same AIOStreams installation URL as webOS. NextUp searches every addon enabled in that AIOStreams setup, rather than limiting playback to Torrentio.
           </p>
           <form onSubmit={handleSaveAiostreamsUrl} className="space-y-3">
             <div>
               <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                Manifest or Base URL
+                AIOStreams installation or manifest URL
               </label>
               <input
                 type="url"
                 value={aiostreamsUrl}
                 onChange={(e) => setAiostreamsUrl(e.target.value)}
-                placeholder="https://torrentio.strem.fun or https://aiostreams.../manifest.json"
+                placeholder="https://your-aiostreams-instance/.../manifest.json"
                 className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl py-2.5 px-3.5 text-slate-900 dark:text-white text-xs font-mono focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
               />
             </div>
@@ -514,7 +514,7 @@ export function SettingsModal({
                 disabled={loading}
                 className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-500/50 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition-all shadow-md shadow-orange-500/20"
               >
-                {loading ? 'Validating...' : 'Save Provider URL'}
+                {loading ? 'Validating...' : 'Save AIOStreams URL'}
               </button>
               {aiostreamsUrl && (
                 <button

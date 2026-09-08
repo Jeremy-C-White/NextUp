@@ -6,7 +6,6 @@ import { AddToCalendarButton } from "./AddToCalendarButton";
 import { getTMDBIdFromIMDB, getWatchProviders, getTMDBExternalIds, getTMDBMovieDetails, TMDBMovieDetails } from "../lib/tmdb";
 import { resolveTVMazeShow, getEpisodes } from "../lib/tvmaze";
 import { getEpisodeReleaseTime, isEpisodeReleased, getReleasedEpisodes } from "../lib/episodes";
-import { getBestTorrentioStream } from "../lib/debrid";
 import { doc, setDoc } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { removeUndefined } from "../lib/library";

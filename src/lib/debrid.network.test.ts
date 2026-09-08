@@ -1,5 +1,5 @@
 import { expect, test, describe, vi, beforeEach, afterEach } from 'vitest';
-import { getBestTorrentioStream } from './debrid';
+import { getBestAioStreamsSources, getBestTorrentioStream } from './debrid';
 
 const MOCK_AIO_RESPONSE = {
   streams: [
@@ -80,6 +80,23 @@ describe('AIOStreams Network layer', () => {
     const candidates = await getBestTorrentioStream('tt7654321', 1, 1, 'series', undefined, true);
     expect(candidates[0].audioLanguage).toBe('english');
     expect(candidates.some(candidate => candidate.url.includes('spanish'))).toBe(false);
+  });
+
+  test('returns the complete browser-compatible AIOStreams source pool', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        streams: Array.from({ length: 32 }, (_, index) => ({
+          name: '[RD+] AIOStreams',
+          title: `Show.S01E01.English.1080p.H264.AAC.source-${index}.mp4`,
+          url: `https://example.com/source-${index}.mp4`
+        }))
+      })
+    });
+
+    const candidates = await getBestAioStreamsSources('tt7654333', 1, 1, 'series', undefined, true);
+    expect(candidates).toHaveLength(32);
   });
 
   test('does not intentionally play a source labelled only as non-English', async () => {

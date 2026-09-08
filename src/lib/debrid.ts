@@ -84,7 +84,11 @@ export function getAioStreamsBaseUrl(): string {
   if (!configuredUrl) {
     throw new Error("AIOStreams is not configured. Set VITE_AIOSTREAMS_BASE_URL or configure it in Settings.");
   }
-  const normalizedUrl = configuredUrl.replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "");
+  return normalizeAioStreamsBaseUrl(configuredUrl);
+}
+
+export function normalizeAioStreamsBaseUrl(configuredUrl: string): string {
+  const normalizedUrl = configuredUrl.trim().replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "");
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(normalizedUrl);
@@ -1169,7 +1173,7 @@ interface StreamCacheEntry {
 const STREAM_CACHE = new Map<string, StreamCacheEntry>();
 const STREAM_CACHE_TTL_MS = 900_000;
 
-export async function getBestTorrentioStream(
+export async function getBestAioStreamsSources(
   imdbId: string,
   season: number,
   episode: number,
@@ -1213,6 +1217,10 @@ export async function getBestTorrentioStream(
     throw error;
   }
 }
+
+// Backward-compatible name for older callers. Source discovery has always used
+// the configured AIOStreams installation URL rather than calling Torrentio directly.
+export const getBestTorrentioStream = getBestAioStreamsSources;
 
 async function fetchBestStreamImpl(
   imdbId: string,
@@ -1477,8 +1485,8 @@ async function fetchBestStreamImpl(
   const external = finalCandidates.filter(c => c.container === "external");
 
   return [
-    ...compatible.slice(0, 15),
-    ...probe.slice(0, 12),
+    ...compatible,
+    ...probe,
     ...external.slice(0, 15)
   ];
 }

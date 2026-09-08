@@ -55,6 +55,14 @@ describe("selectPhonePlaybackCandidates", () => {
 
     expect(selected.map(item => item.id)).toEqual(["safari-safe", "hevc-mp4", "opaque-high-score"]);
   });
+
+  it("does not cap the compatible source pool by default", () => {
+    const available = Array.from({ length: 24 }, (_, index) =>
+      candidate(`native-${index}`, "mp4", "web-compatible", "1080p", "h264", "aac")
+    );
+
+    expect(selectPhonePlaybackCandidates(available)).toHaveLength(24);
+  });
 });
 
 describe("VLC fallback", () => {

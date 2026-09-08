@@ -15,6 +15,16 @@ export const createCarouselWheelState = (): CarouselWheelState => ({
   lockedUntil: 0
 });
 
+export function getCarouselSwipeDirection(
+  deltaX: number,
+  deltaY: number,
+  threshold = 48
+): -1 | 1 | null {
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return null;
+  if (Math.abs(deltaX) <= Math.abs(deltaY) || Math.abs(deltaX) < threshold) return null;
+  return deltaX < 0 ? 1 : -1;
+}
+
 export function consumeCarouselWheel(
   state: CarouselWheelState,
   deltaX: number,

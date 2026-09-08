@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { X, PlayCircle, PauseCircle, RefreshCcw, List, Check, Database, Film, ArrowRight, RotateCcw, SkipForward, Languages, Rewind, FastForward, Captions, ExternalLink } from "lucide-react";
-import { getBestTorrentioStream } from "../lib/debrid";
+import { getBestAioStreamsSources } from "../lib/debrid";
 import { PlaybackRequest, PlaybackCandidate } from "../types";
 import { getTMDBExternalIds } from "../lib/tmdb";
 import { getShow, resolveTVMazeShow } from "../lib/tvmaze";
@@ -273,7 +273,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const playAttemptedForSourceRef = useRef(false);
   const candidateAdvanceLockRef = useRef(false);
   const sourceValidatedRef = useRef(false);
-  const startupDeadlineRef = useRef(0);
   const completionHandledRef = useRef(false);
   const lastClockSecondRef = useRef(-1);
   const pointerPositionRef = useRef<{ x: number; y: number } | null>(null);
@@ -741,7 +740,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     playAttemptedForSourceRef.current = false;
     sourceValidatedRef.current = false;
     resumeAppliedForSourceRef.current = false;
-    startupDeadlineRef.current = Date.now() + 30_000;
     setSourceValidated(false);
     setAutoplayBlocked(false);
     setCandidateIndex(index);
@@ -820,15 +818,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       setPlaybackError(null);
       setIsLoading(true);
     };
-
-    if (!manual && startupDeadlineRef.current !== 0 && Date.now() > startupDeadlineRef.current) {
-      if (showVlcFallback("NextUp tried the phone-ready sources, but none started in the browser.")) return;
-      setMode('error');
-      modeRef.current = 'error';
-      setPlaybackError("Your phone tried the best direct sources, but none started in time.");
-      setIsLoading(false);
-      return;
-    }
 
     if (currentIndex + 1 < currentSources.length) {
       const nextIdx = currentIndex + 1;
@@ -1084,7 +1073,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         
         setStatusText("Finding sources...");
         const forceRefresh = resolutionAttempt > 0;
-        const found = await getBestTorrentioStream(
+        const found = await getBestAioStreamsSources(
           activeImdbId,
           request.season,
           request.number,
@@ -1117,7 +1106,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           candidateIndexRef.current = 0;
           setMode('playing');
           modeRef.current = 'playing';
-          startupDeadlineRef.current = Date.now() + 45_000;
           setAutoplayBlocked(false);
           setSourceValidated(false);
           sourceValidatedRef.current = false;
@@ -1512,7 +1500,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   // is too late for seamless autoplay.
   useEffect(() => {
     if (!shouldWarmNextSource || !nextRequest?.imdbId) return;
-    void getBestTorrentioStream(
+    void getBestAioStreamsSources(
       nextRequest.imdbId,
       nextRequest.season,
       nextRequest.number,
@@ -1583,15 +1571,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setIsLoading(true);
     setStatusText(`Checking source ${candidateIndexRef.current + 1} of ${playableCandidatesRef.current.length}...`);
 
-    let timeoutDuration = candidateIndexRef.current === 0 ? 12_000 : 6_500;
-    if (startupDeadlineRef.current !== 0) {
-      const remainingBudget = startupDeadlineRef.current - Date.now();
-      if (remainingBudget > 0 && remainingBudget < timeoutDuration) {
-        timeoutDuration = remainingBudget;
-      } else if (remainingBudget <= 0) {
-        timeoutDuration = 0; // Trigger immediately
-      }
-    }
+    const timeoutDuration = candidateIndexRef.current === 0 ? 12_000 : 6_500;
     const timeout = window.setTimeout(() => {
       if (modeRef.current !== 'playing' || sourceValidatedRef.current) return;
 
@@ -1658,7 +1638,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         duration: Number.isFinite(video.duration) ? video.duration : 0,
         playing: !video.paused
       });
-      startupDeadlineRef.current = 0;
       if (stallTimer) clearTimeout(stallTimer);
     };
 
@@ -1685,7 +1664,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         setIsMidstreamBuffering(false);
         setAutoplayBlocked(false);
         setStatusText("Playing");
-        startupDeadlineRef.current = 0;
         if (stallTimer) clearTimeout(stallTimer);
         persistPlaybackProgress();
 
@@ -1780,7 +1758,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       applySavedProgress(video);
       if (!ensureEnglishAudio(video)) return;
       
-      startupDeadlineRef.current = 0;
 
       if (isIOS) {
         setAutoplayBlocked(true);
