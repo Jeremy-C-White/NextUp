@@ -37,7 +37,7 @@ import { findNextReleasedEpisode } from "./lib/autoplay";
 import { rankUpNextItems } from "./lib/upNext";
 import { buildEpisodeBacklog, hasRecentUnwatchedEpisode } from "./lib/episodeBacklog";
 import { buildEpisodeProgressSelection } from "./lib/episodeProgress";
-import { buildPlaybackPercentageIndex, clearPlaybackProgress, getPlaybackPercentage, getResumePosition, readPlaybackProgress } from "./lib/playbackProgress";
+import { buildPlaybackPercentageIndex, clearPlaybackProgress, getResumePosition, readPlaybackProgress } from "./lib/playbackProgress";
 import { resolveBackAction, shouldIgnoreBackPress } from "./lib/backNavigation";
 import {
   applyRecommendationFeedback,
@@ -601,12 +601,6 @@ const loadWithFallback = async (
     if (!user?.uid) return null;
     const record = readPlaybackProgress(window.localStorage, user.uid, showId, episodeId);
     return getResumePosition(record);
-  }, [playbackProgressRevision, user?.uid]);
-
-  const getSavedPlaybackPercentage = useCallback((showId: string, episodeId: string): number | null => {
-    if (!user?.uid) return null;
-    const record = readPlaybackProgress(window.localStorage, user.uid, showId, episodeId);
-    return getPlaybackPercentage(record);
   }, [playbackProgressRevision, user?.uid]);
 
   const playbackPercentageByShow = useMemo(() => {
@@ -1951,7 +1945,6 @@ const loadWithFallback = async (
               onPlay={(show, episode) => handlePlayEpisode(show.id, show.imdbId, episode)}
               onFindShow={openSearch}
               getResumePosition={getSavedResumePosition}
-              getPlaybackPercentage={getSavedPlaybackPercentage}
               themeMusicEnabled={themeMusicEnabled && !(
                 appError ||
                 detailsShow ||

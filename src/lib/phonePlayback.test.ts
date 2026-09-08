@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { PlaybackCandidate } from "../types";
-import { selectPhonePlaybackCandidates } from "./phonePlayback";
+import {
+  getExternalPlayerLaunchUrl,
+  selectPhonePlaybackCandidates,
+  selectVlcFallbackCandidates
+} from "./phonePlayback";
 
 const candidate = (
   id: string,
   mediaContainer: string,
   container: string,
-  quality: string = "1080p"
+  quality: string = "1080p",
+  videoCodec?: string,
+  audioCodec?: string
 ): PlaybackCandidate => ({
   id,
   url: `https://example.com/${id}`,
@@ -14,6 +20,8 @@ const candidate = (
   quality,
   mediaContainer,
   container,
+  videoCodec,
+  audioCodec,
   score: 1
 });
 
@@ -36,5 +44,36 @@ describe("selectPhonePlaybackCandidates", () => {
 
     expect(selected.map(item => item.id)).toContain("mp4-fallback");
     expect(selected.findIndex(item => item.id === "mp4-fallback")).toBeLessThanOrEqual(4);
+  });
+
+  it("tries confirmed H264/AAC MP4 before opaque phone probes", () => {
+    const selected = selectPhonePlaybackCandidates([
+      candidate("opaque-high-score", "", "web-probe", "4K"),
+      candidate("hevc-mp4", "mp4", "web-compatible", "1080p", "hevc", "aac"),
+      candidate("safari-safe", "mp4", "web-compatible", "1080p", "h264", "aac")
+    ]);
+
+    expect(selected.map(item => item.id)).toEqual(["safari-safe", "hevc-mp4", "opaque-high-score"]);
+  });
+});
+
+describe("VLC fallback", () => {
+  it("keeps only external MKV files for the fallback screen", () => {
+    const selected = selectVlcFallbackCandidates([
+      candidate("native-mp4", "mp4", "web-compatible"),
+      candidate("external-mp4", "mp4", "external"),
+      candidate("external-mkv", "mkv", "external"),
+      candidate("probe-mkv", "mkv", "web-probe")
+    ]);
+
+    expect(selected.map(item => item.id)).toEqual(["external-mkv"]);
+  });
+
+  it("builds the VLC iOS callback without losing the signed stream URL", () => {
+    const streamUrl = "https://cdn.example.com/movie.mkv?token=a+b&expires=123";
+
+    expect(getExternalPlayerLaunchUrl(streamUrl, "ios")).toBe(
+      `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(streamUrl)}`
+    );
   });
 });

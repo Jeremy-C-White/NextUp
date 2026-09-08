@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { X, PlayCircle, PauseCircle, RefreshCcw, List, Check, Database, Film, ArrowRight, RotateCcw, SkipForward, Languages, Rewind, FastForward, Captions } from "lucide-react";
+import { X, PlayCircle, PauseCircle, RefreshCcw, List, Check, Database, Film, ArrowRight, RotateCcw, SkipForward, Languages, Rewind, FastForward, Captions, ExternalLink } from "lucide-react";
 import { getBestTorrentioStream } from "../lib/debrid";
 import { PlaybackRequest, PlaybackCandidate } from "../types";
 import { getTMDBExternalIds } from "../lib/tmdb";
@@ -21,7 +21,12 @@ import {
   shouldStartCreditsAutoplay
 } from "../lib/autoplay";
 import { optimizeArtworkUrl } from "../lib/images";
-import { selectPhonePlaybackCandidates } from "../lib/phonePlayback";
+import {
+  ExternalPlayerPlatform,
+  getExternalPlayerLaunchUrl,
+  selectPhonePlaybackCandidates,
+  selectVlcFallbackCandidates
+} from "../lib/phonePlayback";
 import {
   findActiveIntroDBSegment,
   getIntroDBSegments,
@@ -78,7 +83,11 @@ function StreamBadges({ cand }: { cand: PlaybackCandidate }) {
           👤 {cand.seeders} seeds
         </span>
       )}
-      {cand.playbackSupport === "probe" ? (
+      {cand.playbackSupport === "external" ? (
+        <span className="bg-orange-500/15 text-orange-200 font-bold text-[10px] px-2 py-0.5 rounded border border-orange-500/25">
+          VLC
+        </span>
+      ) : cand.playbackSupport === "probe" ? (
         <span className="bg-amber-500/15 text-amber-200 font-bold text-[10px] px-2 py-0.5 rounded border border-amber-500/25">
           Phone test
         </span>
@@ -175,10 +184,10 @@ function PlaybackLoadingHero({ request, statusText }: { request: PlaybackRequest
           <div className="flex items-center gap-4 mb-4">
             <div className="w-10 h-10 border-4 border-orange-500/30 border-t-orange-500 rounded-full animate-spin shrink-0" />
             <div>
-              <p className="text-white text-lg font-bold">Finding the best English source</p>
+              <p className="text-white text-lg font-bold">Finding the best iPhone source</p>
               <p className="text-slate-300 text-sm mt-1">{statusText}</p>
               {statusText.toLowerCase().includes("retrying") && (
-                <p className="text-orange-200 text-xs mt-2">Recovery is automatic—keep this screen open.</p>
+                <p className="text-orange-200 text-xs mt-2">NextUp will try compatible backups automatically.</p>
               )}
             </div>
           </div>
@@ -202,7 +211,7 @@ interface VideoPlayerModalProps {
   onClose: () => void;
 }
 
-type PlayerMode = 'loading' | 'playing' | 'error';
+type PlayerMode = 'loading' | 'playing' | 'vlc_fallback' | 'error';
 
 interface WebOSAudioTrack extends AudioTrackDescriptor {
   enabled: boolean;
@@ -227,6 +236,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   
   const [candidates, setCandidates] = useState<PlaybackCandidate[]>([]);
+  const [vlcCandidates, setVlcCandidates] = useState<PlaybackCandidate[]>([]);
   const [candidateIndex, setCandidateIndex] = useState(0);
   
   const playableCandidates = candidates.filter(c =>
@@ -235,6 +245,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
   const [mode, setMode] = useState<PlayerMode>('loading');
   const [showSourceSelector, setShowSourceSelector] = useState(false);
+  const [showAllVlcSources, setShowAllVlcSources] = useState(false);
   
   const [statusText, setStatusText] = useState("Locating title...");
   const [playbackError, setPlaybackError] = useState<string | null>(null);
@@ -284,12 +295,16 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
   // Mutable refs to eliminate stale closure issues in timers & event handlers
   const playableCandidatesRef = useRef<PlaybackCandidate[]>([]);
+  const vlcCandidatesRef = useRef<PlaybackCandidate[]>([]);
   const candidateIndexRef = useRef<number>(0);
   const modeRef = useRef<PlayerMode>('loading');
 
   useEffect(() => {
     playableCandidatesRef.current = playableCandidates;
   }, [candidates]);
+  useEffect(() => {
+    vlcCandidatesRef.current = vlcCandidates;
+  }, [vlcCandidates]);
   useEffect(() => { candidateIndexRef.current = candidateIndex; }, [candidateIndex]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
@@ -744,6 +759,35 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     }
   };
 
+  const openInExternalPlayer = useCallback((directStreamUrl: string) => {
+    const platform: ExternalPlayerPlatform = isIOS
+      ? "ios"
+      : /Android/i.test(navigator.userAgent)
+        ? "android"
+        : "desktop";
+    const launchUrl = getExternalPlayerLaunchUrl(directStreamUrl, platform);
+
+    if (platform === "desktop") {
+      window.open(launchUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    // Custom player schemes must be opened synchronously from the user's tap.
+    window.location.href = launchUrl;
+  }, [isIOS]);
+
+  const showVlcFallback = useCallback((message: string) => {
+    if (vlcCandidatesRef.current.length === 0) return false;
+    setShowAllVlcSources(false);
+    setMode('vlc_fallback');
+    modeRef.current = 'vlc_fallback';
+    setPlaybackError(message);
+    setIsLoading(false);
+    setIsMidstreamBuffering(false);
+    setAutoplayBlocked(false);
+    return true;
+  }, []);
+
 
   const handleNextCandidate = useCallback((manual = false) => {
     // Several media events can fire for the same failure. Only advance once.
@@ -778,6 +822,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     };
 
     if (!manual && startupDeadlineRef.current !== 0 && Date.now() > startupDeadlineRef.current) {
+      if (showVlcFallback("NextUp tried the phone-ready sources, but none started in the browser.")) return;
       setMode('error');
       modeRef.current = 'error';
       setPlaybackError("Your phone tried the best direct sources, but none started in time.");
@@ -812,12 +857,13 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         }, 0);
       }
     } else {
+      if (showVlcFallback("Every phone-ready source was tried before offering these MKV files.")) return;
       setMode('error');
       modeRef.current = 'error';
       setPlaybackError("Every phone-ready source was tried. Please refresh the source search.");
       setIsLoading(false);
     }
-  }, [persistPlaybackProgress, rememberSameSessionFailoverPosition, resetSubtitleAssist]);
+  }, [persistPlaybackProgress, rememberSameSessionFailoverPosition, resetSubtitleAssist, showVlcFallback]);
 
   /**
    * Real-Debrid can occasionally return a short placeholder video stating that
@@ -911,6 +957,9 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     modeRef.current = 'loading';
     setCandidates([]);
     playableCandidatesRef.current = [];
+    setVlcCandidates([]);
+    vlcCandidatesRef.current = [];
+    setShowAllVlcSources(false);
     setCandidateIndex(0);
     candidateIndexRef.current = 0;
     setPlaybackError(null);
@@ -1056,21 +1105,29 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         }
 
         const compatibleSources = selectPhonePlaybackCandidates(found);
+        const externalMkvSources = selectVlcFallbackCandidates(found);
 
         setCandidates(compatibleSources);
         playableCandidatesRef.current = compatibleSources;
+        setVlcCandidates(externalMkvSources);
+        vlcCandidatesRef.current = externalMkvSources;
         
         if (compatibleSources.length > 0) {
           setCandidateIndex(0);
           candidateIndexRef.current = 0;
           setMode('playing');
           modeRef.current = 'playing';
-          startupDeadlineRef.current = Date.now() + 55000;
+          startupDeadlineRef.current = Date.now() + 45_000;
           setAutoplayBlocked(false);
           setSourceValidated(false);
           sourceValidatedRef.current = false;
           setIsLoading(true);
           setStatusText(`Checking source 1 of ${compatibleSources.length}...`);
+        } else if (externalMkvSources.length > 0) {
+          setMode('vlc_fallback');
+          modeRef.current = 'vlc_fallback';
+          setPlaybackError("No browser-compatible source was found. These MKV files can be opened in VLC.");
+          setIsLoading(false);
         } else {
           setMode('error');
           modeRef.current = 'error';
@@ -1526,7 +1583,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setIsLoading(true);
     setStatusText(`Checking source ${candidateIndexRef.current + 1} of ${playableCandidatesRef.current.length}...`);
 
-    let timeoutDuration = candidateIndexRef.current === 0 ? 15000 : 7000;
+    let timeoutDuration = candidateIndexRef.current === 0 ? 12_000 : 6_500;
     if (startupDeadlineRef.current !== 0) {
       const remainingBudget = startupDeadlineRef.current - Date.now();
       if (remainingBudget > 0 && remainingBudget < timeoutDuration) {
@@ -1569,7 +1626,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       }
 
       if (stallTimer) clearTimeout(stallTimer);
-      const stallDuration = candidateIndexRef.current === 0 ? 15000 : 7000;
+      const stallDuration = candidateIndexRef.current === 0 ? 12_000 : 6_500;
       stallTimer = setTimeout(() => {
         if (
           modeRef.current === 'playing' &&
@@ -1819,7 +1876,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     };
   }, [showControlsTemporarily]);
 
-  const showCloseButton = showUI || mode === 'error' || isLoading || autoplayBlocked || episodeEnded;
+  const showCloseButton = showUI || mode === 'vlc_fallback' || mode === 'error' || isLoading || autoplayBlocked || episodeEnded;
   const nextEpisodeArtwork = optimizeArtworkUrl(
     nextRequest?.episodeImageUrl || nextRequest?.backdropUrl || nextRequest?.imageUrl
   );
@@ -2206,6 +2263,91 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
                   </button>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODE: VLC fallback — reached only after browser playback is unavailable. */}
+      {mode === 'vlc_fallback' && (
+        <div
+          data-phone-vlc-fallback="true"
+          className="relative z-[102] h-dvh overflow-y-auto overscroll-contain px-4 sm:px-8 pt-[calc(4.5rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))]"
+        >
+          <div className="w-full max-w-3xl mx-auto">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center">
+                <ExternalLink className="w-8 h-8 text-orange-400" />
+              </div>
+              <p className="text-orange-400 text-xs font-extrabold uppercase tracking-[0.2em] mb-2">Browser fallback</p>
+              <h2 className="text-2xl sm:text-3xl font-display font-bold text-white">Open the MKV in VLC</h2>
+              <p className="text-slate-300 text-sm sm:text-base mt-3 max-w-xl mx-auto leading-relaxed">
+                {playbackError || "No compatible browser source could be played."} VLC can handle the remaining MKV options.
+              </p>
+              <p className="text-slate-500 text-xs mt-2">This screen appears only after phone-compatible sources are unavailable or fail.</p>
+            </div>
+
+            <div className="space-y-3">
+              {(showAllVlcSources ? vlcCandidates : vlcCandidates.slice(0, 1)).map((candidate, index) => (
+                <div
+                  key={candidate.id || `vlc-source-${index}`}
+                  className={`rounded-2xl border p-4 sm:p-5 bg-slate-900/90 ${index === 0 ? "border-orange-500/55" : "border-white/10"}`}
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0">
+                      {index === 0 && (
+                        <span className="inline-flex mb-2 px-2 py-1 rounded-full bg-orange-500 text-orange-950 text-[10px] font-black uppercase tracking-wider">
+                          Recommended
+                        </span>
+                      )}
+                      <StreamBadges cand={candidate} />
+                    </div>
+                    <span className="shrink-0 text-xs font-mono text-slate-400">{formatBytes(candidate.sizeBytes)}</span>
+                  </div>
+                  <p className="text-white/90 text-xs sm:text-sm font-mono leading-relaxed break-all line-clamp-2 mb-4">
+                    {candidate.title}
+                  </p>
+                  <button
+                    type="button"
+                    data-tv-default-focus={index === 0 ? "true" : undefined}
+                    onClick={() => openInExternalPlayer(candidate.url)}
+                    className="w-full min-h-[52px] px-5 py-3 rounded-xl bg-orange-500 hover:bg-orange-400 active:scale-[0.99] text-orange-950 font-extrabold flex items-center justify-center gap-2 transition-all focus:outline-none focus:ring-4 focus:ring-orange-300"
+                  >
+                    <PlayCircle className="w-5 h-5" />
+                    {isIOS ? "Continue in VLC" : "Open externally"}
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {vlcCandidates.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setShowAllVlcSources(show => !show)}
+                className="w-full min-h-11 mt-3 px-4 py-2 rounded-xl text-sm font-bold text-slate-300 hover:text-white hover:bg-white/5"
+              >
+                {showAllVlcSources
+                  ? "Show only the recommended VLC source"
+                  : `Show ${vlcCandidates.length - 1} other VLC source${vlcCandidates.length === 2 ? "" : "s"}`}
+              </button>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setResolutionAttempt(attempt => attempt + 1)}
+                className="min-h-[52px] px-5 py-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-bold flex items-center justify-center gap-2"
+              >
+                <RefreshCcw className="w-4 h-4" />
+                Search browser sources again
+              </button>
+              <button
+                type="button"
+                onClick={closePlayer}
+                className="min-h-[52px] px-5 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 font-semibold"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

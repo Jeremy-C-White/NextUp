@@ -9,7 +9,6 @@ import { formatUpNextAirDate, SmartUpNextItem } from "../lib/upNext";
 import { formatCatchUpDuration } from "../lib/episodeBacklog";
 import { consumeCarouselWheel, createCarouselWheelState } from "../lib/carouselWheel";
 import { getAdjacentCarouselIndexes } from "../lib/carouselPreload";
-import { ProgressRing } from "./ProgressRing";
 import { TvThemePlayer, TvThemePlaybackStatus, TvThemePlayerHandle } from "./TvThemePlayer";
 
 interface UpNextTabProps {
@@ -19,7 +18,6 @@ interface UpNextTabProps {
   onFindShow: () => void;
   onWarmSource: (show: UserShow, episode: UserEpisode) => void;
   getResumePosition: (showId: string, episodeId: string) => number | null;
-  getPlaybackPercentage: (showId: string, episodeId: string) => number | null;
   themeMusicEnabled: boolean;
   memoryKey?: string;
 }
@@ -31,7 +29,6 @@ export function UpNextTab({
   onFindShow,
   onWarmSource,
   getResumePosition,
-  getPlaybackPercentage,
   themeMusicEnabled,
   memoryKey
 }: UpNextTabProps) {
@@ -186,6 +183,15 @@ export function UpNextTab({
     window.requestAnimationFrame(() => heroPlayButtonRef.current?.focus({ preventScroll: true }));
   };
 
+  const handleThumbnailClick = (item: SmartUpNextItem, index: number) => {
+    const touchFirst = navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches;
+    if (touchFirst || window.matchMedia("(max-width: 767px)").matches) {
+      onPlay(item.show, item.nextEp);
+      return;
+    }
+    activateFromThumbnail(index);
+  };
+
   return (
     <section data-tv-up-next-screen="true" data-tv-adjacent-artwork-preload="true" className="tv-up-next-dashboard relative flex flex-col gap-3">
       <TvThemePlayer
@@ -194,9 +200,9 @@ export function UpNextTab({
         enabled={themeMusicEnabled}
         onStatusChange={setThemeStatus}
       />
-      <div className="tv-up-next-heading flex items-center gap-4">
+      <div className="tv-up-next-heading flex flex-wrap items-center gap-x-4 gap-y-1">
         <h2 className="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight whitespace-nowrap">Next Up</h2>
-        {items.length > 0 && <p className="hidden lg:block truncate text-slate-600 dark:text-slate-400 text-base">{queueSummary}</p>}
+        {items.length > 0 && <p className="order-3 w-full sm:order-none sm:w-auto truncate text-slate-600 dark:text-slate-400 text-sm sm:text-base">{queueSummary}</p>}
         {themeStatus === "blocked" && themeMusicEnabled && (
           <button
             type="button"
@@ -225,9 +231,8 @@ export function UpNextTab({
           </button>
         </div>
       ) : activeItem ? (() => {
-        const { show, nextEp, progress, queueReason, backlog } = activeItem;
+        const { show, nextEp, queueReason, backlog } = activeItem;
         const resumePosition = getResumePosition(show.id, nextEp.id);
-        const playbackPercentage = getPlaybackPercentage(show.id, nextEp.id);
         const releaseTime = getEpisodeReleaseTime(nextEp);
         const episodeLabel = show.isMovie
           ? "Feature Film"
@@ -250,7 +255,7 @@ export function UpNextTab({
             <article
               data-tv-card="true"
               data-tv-up-next-hero="true"
-              className="relative shrink-0 w-full md:w-[46%] min-h-[370px] sm:min-h-[420px] rounded-3xl md:rounded-[2rem] overflow-hidden bg-slate-950 border border-slate-700"
+              className="relative shrink-0 w-full md:w-[46%] min-h-[410px] sm:min-h-[420px] rounded-3xl md:rounded-[2rem] overflow-hidden bg-slate-950 border border-slate-700 shadow-xl"
             >
               <button
                 ref={heroPlayButtonRef}
@@ -268,7 +273,6 @@ export function UpNextTab({
               />
 
               <div key={`${show.id}:${nextEp.id}`} data-tv-up-next-hero-content="true" className="absolute inset-0">
-                <ProgressRing percentage={playbackPercentage} className="absolute top-8 right-8 z-20 pointer-events-none" />
                 {show.imageUrl ? (
                   <img
                     decoding="async"
@@ -285,25 +289,19 @@ export function UpNextTab({
 
                 <div data-tv-hero-side-gradient="true" className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/75 to-slate-950/10 pointer-events-none" />
                 <div data-tv-hero-floor-gradient="true" className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/25 to-transparent pointer-events-none" />
-                {!show.isMovie && (
-                  <div data-tv-up-next-series-progress="true" className="absolute inset-x-8 bottom-5 z-20 h-1.5 bg-white/15 rounded-full overflow-hidden pointer-events-none" aria-label={`${progress}% watched`}>
-                    <div className="h-full bg-orange-500 rounded-full" style={{ width: `${progress}%` }} />
-                  </div>
-                )}
-
-                <div data-tv-up-next-hero-copy="true" className="relative z-10 h-full p-7 md:p-9 flex flex-col justify-end max-w-[88%] pointer-events-none">
+                <div data-tv-up-next-hero-copy="true" className="relative z-10 h-full p-5 sm:p-7 md:p-9 flex flex-col justify-end max-w-full sm:max-w-[88%] pointer-events-none">
                   <div className="flex flex-wrap items-center gap-3 mb-3">
                     <span data-tv-hero-eyebrow="true" className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">{queueReason}</span>
                   </div>
 
-                  <h3 className="text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2">
+                  <h3 className="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2">
                     {show.name}
                   </h3>
                   <p className="text-lg md:text-xl font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">
                     {episodeLabel}
                   </p>
 
-                  <div data-tv-hero-meta="true" className="flex flex-wrap items-center gap-3 text-base text-slate-300 mb-4">
+                  <div data-tv-hero-meta="true" className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm sm:text-base text-slate-300 mb-4">
                     {releaseTime && <span>{formatUpNextAirDate(releaseTime)}</span>}
                     {(nextEp.runtime || show.runtime) && <span>{nextEp.runtime || show.runtime} min</span>}
                     {backlog.unwatchedCount > 1 && backlog.remainingMinutes > 0 && (
@@ -312,7 +310,7 @@ export function UpNextTab({
                   </div>
 
                   <div className="flex items-center">
-                    <span data-tv-hero-action="true" className="inline-flex w-fit max-w-full min-w-[170px] px-5 md:px-7 py-3.5 bg-orange-500 text-orange-950 text-lg font-extrabold rounded-2xl items-center justify-center gap-3 whitespace-nowrap">
+                    <span data-tv-hero-action="true" className="inline-flex w-full sm:w-fit max-w-full min-h-[52px] sm:min-w-[170px] px-5 md:px-7 py-3.5 bg-orange-500 text-orange-950 text-lg font-extrabold rounded-2xl items-center justify-center gap-3 whitespace-nowrap">
                       <PlayCircle className="w-7 h-7" />
                       {resumePosition !== null ? `Resume ${formatPlaybackPosition(resumePosition)}` : "Play"}
                     </span>
@@ -322,17 +320,24 @@ export function UpNextTab({
             </article>
 
             {railItems.length > 0 && (
-              <div
-                ref={thumbnailRailRef}
-                data-tv-up-next-rail="true"
-                data-tv-synced-carousel-rail="true"
-                className="flex flex-1 min-w-0 items-start gap-3 sm:gap-5 overflow-x-auto md:overflow-hidden snap-x snap-mandatory pb-2 scrollbar-none"
-              >
-                {railItems.map(({ item, index }) => {
+              <div className="flex flex-1 min-w-0 flex-col gap-2 sm:gap-3">
+                <div className="flex items-center justify-between px-1">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">More from your queue</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 md:hidden">Tap any card to play it</p>
+                  </div>
+                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400">{railItems.length} more</span>
+                </div>
+                <div
+                  ref={thumbnailRailRef}
+                  data-tv-up-next-rail="true"
+                  data-tv-synced-carousel-rail="true"
+                  className="flex flex-1 min-w-0 items-start gap-3 sm:gap-5 overflow-x-auto md:overflow-hidden snap-x snap-mandatory pb-2 scrollbar-none"
+                >
+                  {railItems.map(({ item, index }) => {
                   const thumbnailEpisodeLabel = item.show.isMovie
                     ? "Feature Film"
                     : `S${item.nextEp.season} E${item.nextEp.number}`;
-                  const thumbnailPlaybackPercentage = getPlaybackPercentage(item.show.id, item.nextEp.id);
                   return (
                     <button
                       key={`${item.show.id}:${item.nextEp.id}`}
@@ -342,19 +347,18 @@ export function UpNextTab({
                       data-tv-up-next-thumbnail="true"
                       data-tv-poster-card="true"
                       data-phone-up-next-thumbnail="true"
-                      onClick={() => activateFromThumbnail(index)}
-                      aria-label={`Show ${item.show.name} in the Next Up hero`}
-                      className="relative shrink-0 min-h-[250px] sm:min-h-[280px] rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 text-left active:scale-[0.99] snap-start"
+                      onClick={() => handleThumbnailClick(item, index)}
+                      aria-label={`Play ${item.show.name}, ${thumbnailEpisodeLabel}`}
+                      className="relative shrink-0 min-h-[220px] sm:min-h-[280px] rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 text-left active:scale-[0.98] snap-start shadow-lg"
                       style={{ "--phone-thumbnail-basis": thumbnailBasis } as React.CSSProperties}
                     >
-                      <ProgressRing percentage={thumbnailPlaybackPercentage} size="small" className="absolute top-4 right-4 z-20 pointer-events-none" />
                       {item.show.imageUrl ? (
                         <img
                           decoding="async"
                           referrerPolicy="no-referrer"
                           loading="lazy"
                           fetchPriority="low"
-                          src={optimizeArtworkUrl(item.show.imageUrl, "poster")}
+                          src={optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl)}
                           alt=""
                           className="absolute inset-0 w-full h-full object-cover object-center opacity-90 pointer-events-none"
                         />
@@ -362,7 +366,10 @@ export function UpNextTab({
                         <div className="absolute inset-0 flex items-center justify-center text-5xl font-bold text-slate-700 pointer-events-none">{item.show.name?.[0] || "?"}</div>
                       )}
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/45 to-transparent pointer-events-none" />
-                      <div className="absolute inset-x-0 bottom-0 p-5 pointer-events-none">
+                      <span className="absolute top-3 right-3 z-20 w-11 h-11 rounded-full bg-orange-500 text-orange-950 shadow-lg flex items-center justify-center pointer-events-none md:hidden">
+                        <PlayCircle className="w-6 h-6" />
+                      </span>
+                      <div className="absolute inset-x-0 bottom-0 p-4 sm:p-5 pointer-events-none">
                         <span className="inline-flex mb-2 px-2.5 py-1 rounded-md bg-black/65 border border-white/10 text-orange-300 text-[11px] font-bold uppercase tracking-wider">
                           {item.queueReason}
                         </span>
@@ -374,7 +381,8 @@ export function UpNextTab({
                       </div>
                     </button>
                   );
-                })}
+                  })}
+                </div>
               </div>
             )}
           </div>
