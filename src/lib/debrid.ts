@@ -66,7 +66,7 @@ export interface StreamOption {
   };
 }
 
-type PlaybackType = string;
+type PlaybackType = "series" | "movie";
 
 type ImportMetaWithEnv = ImportMeta & { env?: { VITE_AIOSTREAMS_BASE_URL?: string; }; };
 
@@ -1174,17 +1174,16 @@ const STREAM_CACHE = new Map<string, StreamCacheEntry>();
 const STREAM_CACHE_TTL_MS = 900_000;
 
 export async function getBestAioStreamsSources(
-  mediaId: string,
+  imdbId: string,
   season: number,
   episode: number,
   type: PlaybackType = "series",
   signal?: AbortSignal,
   forceRefresh: boolean = false,
-  onRetry?: StreamLookupProgress,
-  streamIdOverride?: string
+  onRetry?: StreamLookupProgress
 ): Promise<PlaybackCandidate[]> {
-  const normalizedMediaId = mediaId.trim();
-  const streamId = streamIdOverride?.trim() || (type === "series" ? `${normalizedMediaId}:${season}:${episode}` : normalizedMediaId);
+  const normalizedImdbId = imdbId.trim();
+  const streamId = type === "movie" ? normalizedImdbId : `${normalizedImdbId}:${season}:${episode}`;
   const cacheKey = `${type}:${streamId}`;
   
   const now = Date.now();
@@ -1200,7 +1199,7 @@ export async function getBestAioStreamsSources(
     }
   }
 
-  const promise = fetchBestStreamImpl(mediaId, season, episode, type, signal, onRetry, streamIdOverride);
+  const promise = fetchBestStreamImpl(imdbId, season, episode, type, signal, onRetry);
   const entry: StreamCacheEntry = { resolvedAt: null, promise };
   STREAM_CACHE.set(cacheKey, entry);
 
@@ -1224,19 +1223,16 @@ export async function getBestAioStreamsSources(
 export const getBestTorrentioStream = getBestAioStreamsSources;
 
 async function fetchBestStreamImpl(
-  mediaId: string,
+  imdbId: string,
   season: number,
   episode: number,
   type: PlaybackType = "series",
   signal?: AbortSignal,
-  onRetry?: StreamLookupProgress,
-  streamIdOverride?: string
+  onRetry?: StreamLookupProgress
 ): Promise<PlaybackCandidate[]> {
-  const normalizedMediaId = mediaId.trim();
-  const directStreamId = streamIdOverride?.trim();
+  const normalizedImdbId = imdbId.trim();
 
   if (
-    !directStreamId &&
     type === "series" &&
     (
       !Number.isInteger(season) ||
@@ -1248,7 +1244,7 @@ async function fetchBestStreamImpl(
     throw new Error("INVALID_EPISODE_MAPPING");
   }
 
-  if (!directStreamId && !/^tt\d+$/.test(normalizedMediaId)) {
+  if (!/^tt\d+$/.test(normalizedImdbId)) {
     throw new Error(
       type === "movie"
         ? "This movie does not have a valid IMDb identifier."
@@ -1257,13 +1253,12 @@ async function fetchBestStreamImpl(
   }
 
   const streamId =
-    directStreamId || (type === "series"
-      ? `${normalizedMediaId}:${season}:${episode}`
-      : normalizedMediaId);
+    type === "movie"
+      ? normalizedImdbId
+      : `${normalizedImdbId}:${season}:${episode}`;
 
   const baseUrl = getAioStreamsBaseUrl();
-  const encodedStreamId = encodeURIComponent(streamId).replace(/%3A/gi, ":");
-  const requestUrl = `${baseUrl}/stream/${encodeURIComponent(type)}/${encodedStreamId}.json`;
+  const requestUrl = `${baseUrl}/stream/${type}/${streamId}.json`;
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
     () => controller.abort(),

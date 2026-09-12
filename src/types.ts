@@ -112,8 +112,6 @@ export interface PlaybackRequest {
   showName: string;
   isMovie?: boolean;
   imdbId?: string;
-  streamId?: string;
-  streamType?: string;
   _tmdbId?: number;
   tvmazeId?: number;
   episodeId: string;

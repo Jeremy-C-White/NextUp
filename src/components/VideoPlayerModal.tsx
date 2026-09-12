@@ -996,11 +996,10 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     
     async function resolveAndFetch() {
       try {
-        const directStreamId = request.streamId?.trim();
         let activeImdbId = request.imdbId && request.imdbId !== "none" ? request.imdbId : undefined;
         let resolvedTvmazeId = request.tvmazeId;
         
-        if (!directStreamId && !activeImdbId) {
+        if (!activeImdbId) {
           setStatusText("Locating title metadata...");
           if (request.isMovie) {
             const tmdbId = request._tmdbId || (resolvedTvmazeId && resolvedTvmazeId < 0 ? (-resolvedTvmazeId - 1000000000) : undefined);
@@ -1056,13 +1055,12 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           }
         }
         
-        const streamLookupId = directStreamId || activeImdbId;
-        if (!active || !streamLookupId || streamLookupId === "none") {
-          throw new Error("Unable to locate a valid AIOStreams ID for this title. Streams cannot be loaded.");
+        if (!active || !activeImdbId || activeImdbId === "none") {
+          throw new Error("Unable to locate a valid IMDb ID for this title. Streams cannot be loaded.");
         }
-        resolvedImdbIdRef.current = activeImdbId && /^tt\d+$/.test(activeImdbId) ? activeImdbId : null;
+        resolvedImdbIdRef.current = activeImdbId;
 
-        if (!request.isMovie && activeImdbId && /^tt\d+$/.test(activeImdbId)) {
+        if (!request.isMovie) {
           void getIntroDBSegments(activeImdbId, request.season, request.number, controller.signal)
             .then(segments => {
               if (active) setIntroDBSegments(segments);
@@ -1076,18 +1074,17 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         setStatusText("Finding sources...");
         const forceRefresh = resolutionAttempt > 0;
         const found = await getBestAioStreamsSources(
-          streamLookupId,
+          activeImdbId,
           request.season,
           request.number,
-          request.streamType || (request.isMovie ? 'movie' : 'series'),
+          request.isMovie ? 'movie' : 'series',
           controller.signal,
           forceRefresh,
           progress => {
             if (active) {
               setStatusText(`${progress.message} — retrying ${progress.attempt} of ${progress.maxAttempts}...`);
             }
-          },
-          directStreamId
+          }
         );
         
         if (!active) return;

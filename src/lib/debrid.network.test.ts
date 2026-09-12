@@ -64,19 +64,6 @@ describe('AIOStreams Network layer', () => {
     expect(requestUrl).toContain(encodeURIComponent("https://my.aio.streams/stream/series/tt1234567:1:1.json"));
   });
 
-  test('supports catalog-specific AIOStreams IDs without requiring IMDb metadata', async () => {
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => MOCK_AIO_RESPONSE,
-    });
-
-    await getBestAioStreamsSources("catalog:item-1", 0, 0, "other", undefined, true, undefined, "catalog:item-1");
-
-    const requestUrl = fetchSpy.mock.calls[0][0];
-    expect(requestUrl).toContain(encodeURIComponent("https://my.aio.streams/stream/other/catalog:item-1.json"));
-  });
-
   test('filters foreign-only releases and puts explicit English audio first', async () => {
     fetchSpy.mockResolvedValueOnce({
       ok: true,
