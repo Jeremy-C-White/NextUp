@@ -15,6 +15,7 @@ const SearchModal = lazy(() => import("./components/SearchModal").then(m => ({ d
 const DetailsModal = lazy(() => import("./components/DetailsModal").then(m => ({ default: m.DetailsModal })));
 const VideoPlayerModal = lazy(() => import("./components/VideoPlayerModal").then(m => ({ default: m.VideoPlayerModal })));
 const RecommendationModal = lazy(() => import("./components/RecommendationModal").then(m => ({ default: m.RecommendationModal })));
+const XxxDiscoveryModal = lazy(() => import("./components/XxxDiscoveryModal").then(m => ({ default: m.XxxDiscoveryModal })));
 
 import { UserMenu } from "./components/UserMenu";
 import { AddToCalendarButton } from "./components/AddToCalendarButton";
@@ -27,7 +28,7 @@ import { checkAndNotifyUpcomingEpisodes } from "./lib/notifications";
 import { getTrendingShows, getPremieringSoon, resolveTVMazeShow, getShow, getTrendingTVMaze, getHiddenGems, getForYou } from "./lib/tvmaze";
 import { getTrendingTMDB, getTrendingMoviesTMDB, getRecommendationsTMDB, getTMDBIdFromIMDB, getTopShowsByNetwork, getHiddenGemsTMDB, getForYouTMDB, getTMDBExternalIds } from "./lib/tmdb";
 import { getBestAioStreamsSources, warmAioStreamsConnection } from "./lib/debrid";
-import { Tv, Search, LogOut, Settings, CheckCircle2, PlayCircle, Clock, ExternalLink, Compass, X, Calendar, Plus, ChevronLeft, ChevronRight } from "lucide-react";
+import { Tv, Search, LogOut, Settings, CheckCircle2, PlayCircle, Clock, ListVideo, Compass, X, Calendar, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { calculateProgress, isEpisodeReleased, getEpisodeReleaseTime, getReleasedEpisodes } from "./lib/episodes";
 import { format, isFuture, formatDistanceToNow } from "date-fns";
 import { registerSW } from "virtual:pwa-register";
@@ -50,6 +51,7 @@ import {
   writeRecommendationProfile
 } from "./lib/recommendationPreferences";
 import type { RecommendationFeedbackKind, RecommendationProfile, RecommendationSource } from "./lib/recommendationPreferences";
+import type { AioCatalogPlayback } from "./lib/aioCatalog";
 import { parseLibraryShowRecord } from "./lib/libraryData";
 import { readThemeMusicEnabled, saveThemeMusicEnabled } from "./lib/tvThemes";
 
@@ -409,6 +411,7 @@ const loadWithFallback = async (
   }, [upNextHasAllEpisodes, upNextLibraryKey, user?.uid]);
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isXxxDiscoveryOpen, setIsXxxDiscoveryOpen] = useState(false);
   const [addingShowId, setAddingShowId] = useState<number | null>(null);
   const [previewSource, setPreviewSource] = useState<Show | null>(null);
   const [isOnboarding, setIsOnboarding] = useState(() => readStorageValue("nextup_needs_onboarding") === "true");
@@ -451,6 +454,7 @@ const loadWithFallback = async (
   const playbackOpenerRef = useRef<HTMLElement | null>(null);
   const detailsOpenerRef = useRef<HTMLElement | null>(null);
   const searchOpenerRef = useRef<HTMLElement | null>(null);
+  const xxxDiscoveryOpenerRef = useRef<HTMLElement | null>(null);
   const settingsOpenerRef = useRef<HTMLElement | null>(null);
   const lastMainFocusRef = useRef<HTMLElement | null>(null);
   const lastBackHandledAtRef = useRef(0);
@@ -587,6 +591,34 @@ const loadWithFallback = async (
     restoreFocus(searchOpenerRef);
   }, [restoreFocus]);
 
+  const openXxxDiscovery = useCallback(() => {
+    rememberFocus(xxxDiscoveryOpenerRef);
+    setIsXxxDiscoveryOpen(true);
+  }, [rememberFocus]);
+
+  const closeXxxDiscovery = useCallback(() => {
+    setIsXxxDiscoveryOpen(false);
+    restoreFocus(xxxDiscoveryOpenerRef);
+  }, [restoreFocus]);
+
+  const playAioCatalogItem = useCallback((item: AioCatalogPlayback) => {
+    rememberFocus(playbackOpenerRef);
+    setIsXxxDiscoveryOpen(false);
+    setPlaybackRequest({
+      showId: `aio:${item.streamType}:${item.itemId}`,
+      showName: item.name,
+      isMovie: item.streamType !== "series",
+      imdbId: /^tt\d+$/.test(item.itemId) ? item.itemId : undefined,
+      streamId: item.streamId,
+      streamType: item.streamType,
+      episodeId: item.streamId,
+      season: item.season,
+      number: item.episode,
+      episodeName: item.episodeName,
+      provider: "AIOStreams catalog"
+    });
+  }, [rememberFocus]);
+
   const openSettings = useCallback(() => {
     rememberFocus(settingsOpenerRef);
     setIsSettingsOpen(true);
@@ -713,6 +745,11 @@ const loadWithFallback = async (
       if (shouldIgnoreBackPress(event.repeat, now, lastBackHandledAtRef.current)) return;
       lastBackHandledAtRef.current = now;
 
+      if (isXxxDiscoveryOpen) {
+        closeXxxDiscovery();
+        return;
+      }
+
       const decision = resolveBackAction({
         player: Boolean(playbackRequest),
         resumeChoice: Boolean(pendingPlaybackChoice),
@@ -764,9 +801,11 @@ const loadWithFallback = async (
     closeDetails,
     closeSearch,
     closeSettings,
+    closeXxxDiscovery,
     detailsShow,
     isSearchOpen,
     isSettingsOpen,
+    isXxxDiscoveryOpen,
     pendingPlaybackChoice,
     playbackRequest,
     recommendedPick,
@@ -1663,7 +1702,7 @@ const loadWithFallback = async (
     let timer: number | null = null;
     let attempts = 0;
     const restoreSavedFocus = () => {
-      if (cancelled || detailsShow || isSearchOpen || isSettingsOpen || pendingPlaybackChoice || playbackRequest || recommendedPick) return;
+      if (cancelled || detailsShow || isSearchOpen || isSettingsOpen || isXxxDiscoveryOpen || pendingPlaybackChoice || playbackRequest || recommendedPick) return;
       let savedFocusKey: string | null = null;
       try {
         savedFocusKey = localStorage.getItem(`nextup_focus_key:${user.uid}:${activeTab}`);
@@ -1690,7 +1729,7 @@ const loadWithFallback = async (
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [activeTab, detailsShow, isSearchOpen, isSettingsOpen, pendingPlaybackChoice, playbackRequest, recommendedPick, user?.uid, visibleContentVersion]);
+  }, [activeTab, detailsShow, isSearchOpen, isSettingsOpen, isXxxDiscoveryOpen, pendingPlaybackChoice, playbackRequest, recommendedPick, user?.uid, visibleContentVersion]);
 
   const bottomNavUpTarget = activeTab === "up-next"
     ? (upNext.length > 0 ? "#up-next-hero-play" : "[data-tv-up-next-screen] [data-tv-default-focus]")
@@ -1950,6 +1989,7 @@ const loadWithFallback = async (
                 detailsShow ||
                 isSearchOpen ||
                 isSettingsOpen ||
+                isXxxDiscoveryOpen ||
                 pendingPlaybackChoice ||
                 playbackRequest ||
                 recommendedPick
@@ -2292,9 +2332,9 @@ const loadWithFallback = async (
               id: "xxx-discovery",
               label: "XXX Discovery",
               helper: "18+ / NSFW",
-              icon: ExternalLink,
-              action: () => window.open("https://www.pornhub.com/", "_blank", "noopener,noreferrer"),
-              ariaLabel: "Open XXX Discovery, 18 plus and NSFW, in a new tab"
+              icon: ListVideo,
+              action: openXxxDiscovery,
+              ariaLabel: "Open XXX Discovery, 18 plus and NSFW"
             }
           ].map(t => (
             <button
@@ -2335,6 +2375,16 @@ const loadWithFallback = async (
             onClose={closeSearch}
             onAddShow={handleAddShow} 
             library={shows}
+          />
+        </Suspense>
+      )}
+
+      {isXxxDiscoveryOpen && (
+        <Suspense fallback={<ModalLoadingFallback />}>
+          <XxxDiscoveryModal
+            isOpen={isXxxDiscoveryOpen}
+            onClose={closeXxxDiscovery}
+            onPlay={playAioCatalogItem}
           />
         </Suspense>
       )}
