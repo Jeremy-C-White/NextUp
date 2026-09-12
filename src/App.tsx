@@ -2287,7 +2287,15 @@ const loadWithFallback = async (
             { id: "discover", label: "Discover", icon: Compass },
             { id: "search", label: "Search", icon: Search, action: openSearch },
             { id: "coming", label: "Coming", icon: Clock },
-            { id: "library", label: "Library", icon: CheckCircle2 }
+            { id: "library", label: "Library", icon: CheckCircle2 },
+            {
+              id: "xxx-discovery",
+              label: "XXX Discovery",
+              helper: "18+ / NSFW",
+              icon: ExternalLink,
+              action: () => window.open("https://www.pornhub.com/", "_blank", "noopener,noreferrer"),
+              ariaLabel: "Open XXX Discovery, 18 plus and NSFW, in a new tab"
+            }
           ].map(t => (
             <button
               key={t.id}
@@ -2295,6 +2303,7 @@ const loadWithFallback = async (
               type="button"
               data-tv-up={bottomNavUpTarget}
               aria-current={!t.action && activeTab === t.id ? "page" : undefined}
+              aria-label={t.ariaLabel || t.label}
               onClick={() => t.action ? t.action() : setActiveTab(t.id as any)}
               className={`relative flex flex-col items-center justify-center gap-1 p-2 rounded-xl transition-colors active:scale-95 ${
                 (!t.action && activeTab === t.id) ? "text-orange-500" : "text-slate-400 hover:text-slate-300"
@@ -2302,6 +2311,7 @@ const loadWithFallback = async (
             >
               <t.icon className="w-6 h-6" />
               <span className="text-[11px] font-medium tracking-wide">{t.label}</span>
+              {t.helper && <small className="text-[8px] font-bold uppercase tracking-wider text-orange-500">{t.helper}</small>}
             </button>
           ))}
         </div>
