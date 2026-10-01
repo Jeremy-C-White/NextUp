@@ -328,10 +328,11 @@ export function SettingsModal({
 
   return (
     <div data-tv-modal-overlay="settings" className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={onClose}>
-      <div data-tv-modal-surface="settings" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-none sm:rounded-3xl w-full max-w-md h-dvh sm:h-auto p-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:p-6 shadow-2xl relative animate-in max-h-dvh sm:max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain" onClick={(e) => e.stopPropagation()}>
+      <div data-tv-modal-surface="settings" data-phone-settings-surface="true" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-none sm:rounded-3xl w-full max-w-md h-dvh sm:h-auto p-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:p-6 shadow-2xl relative animate-in max-h-dvh sm:max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain" onClick={(e) => e.stopPropagation()}>
         <button 
           onClick={onClose}
           aria-label="Close settings"
+          data-phone-settings-close="true"
           className="absolute right-[calc(0.75rem+env(safe-area-inset-right))] top-[calc(0.75rem+env(safe-area-inset-top))] sm:right-4 sm:top-4 min-h-11 min-w-11 flex items-center justify-center rounded-full text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white"
         >
           <X className="w-6 h-6" />
@@ -339,7 +340,7 @@ export function SettingsModal({
         <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">Settings</h2>
         
         <form onSubmit={handleSubmit} className="space-y-4">
-          <h3 className="text-lg font-medium text-slate-200">Change PIN</h3>
+          <h3 className="text-lg font-medium text-slate-800 dark:text-slate-200">Change PIN</h3>
           
           <div>
             <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">Current 6-digit PIN</label>

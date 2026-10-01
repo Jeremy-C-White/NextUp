@@ -114,7 +114,7 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
     return false;
   });
               return (
-                <div key={show.id} data-tv-search-result="true" className="flex gap-4 p-3 rounded-2xl bg-slate-100/80 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800/50 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
+                <div key={show.id} data-tv-search-result="true" className="flex gap-3 sm:gap-4 p-3 rounded-2xl bg-slate-100/80 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800/50 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
                   {show.image?.medium ? (
                     <img data-tv-search-poster="true" decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={show.image.medium} alt={show.name} className="w-16 h-24 object-cover rounded-xl bg-slate-200 dark:bg-slate-800" />
                   ) : (
@@ -145,8 +145,8 @@ export function SearchModal({ isOpen, onClose, onAddShow, library }: Props) {
                         limit={120}
                       />
                     )}
-                    <div className="mt-3 flex flex-wrap justify-end gap-2">
-                      <div className="flex flex-wrap gap-2 justify-end">
+                    <div data-phone-search-actions="true" className="mt-3 flex flex-wrap justify-end gap-2">
+                      <div className="flex w-full flex-wrap gap-2 justify-end">
                         {inLibrary ? (
                           <div className="flex items-center gap-1.5 px-4 py-2 min-h-[44px] rounded-full text-sm font-semibold bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 cursor-default">
                             <Check className="w-4 h-4" />

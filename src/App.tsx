@@ -1691,7 +1691,7 @@ const loadWithFallback = async (
   return (
     <div className={`nextup-cinema min-h-dvh bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans pb-[calc(6rem+env(safe-area-inset-bottom))] ${activeTab === "up-next" ? "tv-up-next-shell" : ""}`}>
       {/* Topbar */}
-      <header data-tv-app-header="true" className="sticky top-0 z-40 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl border-b border-slate-200/60 dark:border-slate-800/60 px-4 sm:px-8 pt-[calc(1rem+env(safe-area-inset-top))] pb-4 flex items-center justify-between">
+      <header data-tv-app-header="true" className="sticky top-0 z-40 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl border-b border-slate-200/60 dark:border-slate-800/60 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-8 pt-[calc(1rem+env(safe-area-inset-top))] pb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div data-tv-brand-mark="true" className="w-10 h-10 bg-gradient-to-br from-orange-400 to-orange-600 rounded-xl flex items-center justify-center shadow-lg shadow-orange-500/20">
             <Tv className="w-5 h-5 text-slate-950" />
@@ -2079,7 +2079,7 @@ const loadWithFallback = async (
               data-tv-up={bottomNavUpTarget}
               aria-current={!t.action && activeTab === t.id ? "page" : undefined}
               onClick={() => t.action ? t.action() : setActiveTab(t.id as any)}
-              className={`relative flex flex-col items-center justify-center gap-1 p-2 rounded-xl transition-colors active:scale-95 ${
+              className={`relative flex min-h-[54px] min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1.5 py-2 rounded-xl transition-colors active:scale-95 ${
                 (!t.action && activeTab === t.id) ? "text-orange-500" : "text-slate-400 hover:text-slate-300"
               }`}
             >

@@ -184,7 +184,7 @@ export function LibraryTab({
   );
 
   return (
-    <section className="space-y-6">
+    <section data-phone-library-screen="true" className="space-y-6">
       <div data-tv-section="library-controls" className="mb-6">
         <div className="mb-5">
           <h2 className="text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">Your library</h2>
@@ -218,7 +218,7 @@ export function LibraryTab({
               placeholder="Search library..."
               value={librarySearch}
               onChange={(e) => setLibrarySearch(e.target.value)}
-              className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-base rounded-lg px-4 py-2 w-full md:w-48 focus:outline-none focus:border-orange-500"
+              className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-base rounded-xl px-4 py-3 min-h-12 w-full md:w-48 focus:outline-none focus:border-orange-500"
             />
             <select
               data-tv-native-sort="true"
@@ -226,7 +226,7 @@ export function LibraryTab({
               aria-label="Sort your library"
               value={librarySort}
               onChange={(e) => setLibrarySort(e.target.value as any)}
-              className="bg-slate-200 dark:bg-slate-800 text-slate-200 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-base focus:outline-none focus:ring-1 focus:ring-orange-500"
+              className="bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 min-h-12 w-full sm:w-auto text-base focus:outline-none focus:ring-1 focus:ring-orange-500"
             >
               {librarySortOptions.map(option => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -273,13 +273,13 @@ export function LibraryTab({
           ))}
         </div>
       ) : (
-        <div data-tv-grid="true" className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <div data-tv-grid="true" className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
           {gridShows.map(show => renderCard(show, false))}
         </div>
       )}
 
       {shows.length > 0 && (showRows ? shelves.length === 0 : gridShows.length === 0) && (
-        <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 max-w-xl mx-auto text-center mt-6">
+        <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 max-w-xl mx-auto text-center mt-6">
           <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Nothing here</h3>
           <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">
             {searching
@@ -290,7 +290,7 @@ export function LibraryTab({
       )}
 
       {shows.length === 0 && (
-        <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 max-w-xl mx-auto text-center mt-6">
+        <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 max-w-xl mx-auto text-center mt-6">
           <CheckCircle2 className="w-12 h-12 text-slate-400 mx-auto mb-4 animate-pulse" />
           <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">No Saved Movies or Shows</h3>
           <p className="text-slate-600 dark:text-slate-400 text-sm mb-6 leading-relaxed">

@@ -79,7 +79,7 @@ export function ComingTab({ schedule, onOpenDetails, onPlayEpisode, rowStorageKe
         data-tv-card="true"
         data-tv-poster-card="true"
         data-tv-wide-tile="recent"
-        className="relative shrink-0 w-[300px] md:w-[360px] lg:w-[420px] aspect-video rounded-2xl overflow-hidden bg-slate-900 text-left group"
+        className="relative shrink-0 w-[min(82vw,340px)] md:w-[360px] lg:w-[420px] aspect-video rounded-2xl overflow-hidden bg-slate-900 text-left group shadow-lg"
       >
         <button
           data-tv-focus-key={`recently-aired:${card.show.id}`}
@@ -120,7 +120,7 @@ export function ComingTab({ schedule, onOpenDetails, onPlayEpisode, rowStorageKe
         data-tv-card="true"
         data-tv-poster-card="true"
         data-tv-coming-card="week"
-        className="relative rounded-2xl overflow-hidden bg-slate-900 text-left group"
+        className="relative rounded-2xl overflow-visible bg-slate-900 text-left group shadow-md"
       >
         <button
           data-tv-focus-key={`coming:week:${card.key}`}
@@ -129,7 +129,7 @@ export function ComingTab({ schedule, onOpenDetails, onPlayEpisode, rowStorageKe
         >
           <span className="sr-only">{card.show.name}, {describeEpisodes(card.show, card.episodes)}{time ? `, ${time}` : ""}</span>
         </button>
-        <div className="relative aspect-video overflow-hidden">
+        <div className="relative aspect-video overflow-hidden rounded-t-2xl">
           <TileImage src={tileArtwork(card.show, card.episodes.length === 1 ? firstEpisode : undefined)} name={card.show.name} />
           <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950/80 to-transparent pointer-events-none" />
           {time && (
@@ -160,7 +160,7 @@ export function ComingTab({ schedule, onOpenDetails, onPlayEpisode, rowStorageKe
   };
 
   const renderDay = (day: ScheduleDay) => (
-    <div key={day.key} data-tv-week-day={day.key} className="min-w-0">
+    <div key={day.key} data-tv-week-day={day.key} className="min-w-0 snap-start">
       <div className={`mb-3 pb-2 border-b-2 ${day.isToday ? "border-orange-500" : "border-slate-300 dark:border-slate-700"}`}>
         <div className={`text-xl font-display font-bold ${day.isToday ? "text-orange-400" : "text-slate-900 dark:text-white"}`}>{day.title}</div>
         <div className="text-sm font-semibold text-slate-500 dark:text-slate-400">{day.subtitle}</div>
@@ -182,7 +182,7 @@ export function ComingTab({ schedule, onOpenDetails, onPlayEpisode, rowStorageKe
         data-tv-card="true"
         data-tv-poster-card="true"
         data-tv-wide-tile="later"
-        className="relative shrink-0 w-[280px] md:w-[320px] lg:w-[360px] aspect-video rounded-2xl overflow-hidden bg-slate-900 text-left group"
+        className="relative shrink-0 w-[min(82vw,320px)] md:w-[320px] lg:w-[360px] aspect-video rounded-2xl overflow-hidden bg-slate-900 text-left group shadow-lg"
       >
         <button
           data-tv-focus-key={`coming:later:${card.key}`}
@@ -209,7 +209,7 @@ export function ComingTab({ schedule, onOpenDetails, onPlayEpisode, rowStorageKe
   };
 
   return (
-    <section data-tv-coming-screen="true" className="space-y-12">
+    <section data-tv-coming-screen="true" className="space-y-9 sm:space-y-12">
       <div>
         <h2 className="text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">Coming up</h2>
         <p data-tv-coming-summary="true" className="text-slate-600 dark:text-slate-400">{schedule.summary}</p>
@@ -231,7 +231,7 @@ export function ComingTab({ schedule, onOpenDetails, onPlayEpisode, rowStorageKe
         <div data-tv-group-heading="true" className="mb-5">
           <h3 className="text-3xl font-display font-bold text-slate-900 dark:text-white tracking-tight">This week</h3>
         </div>
-        <div data-tv-week-grid="true" className="grid grid-flow-col auto-cols-[minmax(200px,1fr)] gap-4 overflow-x-auto scrollbar-none pb-2">
+        <div data-tv-week-grid="true" className="grid grid-flow-col auto-cols-[minmax(78vw,1fr)] sm:auto-cols-[minmax(200px,1fr)] gap-4 overflow-x-auto overscroll-x-contain snap-x snap-mandatory scrollbar-none pb-3">
           {schedule.weekDays.map(renderDay)}
         </div>
       </div>

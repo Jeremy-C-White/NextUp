@@ -87,7 +87,7 @@ export function RecommendationModal({
       />
 
       {/* Floating recommendation card */}
-      <div className="relative w-full max-w-xl h-dvh sm:h-auto max-h-dvh sm:max-h-[calc(100dvh-3rem)] bg-slate-900 border border-slate-800 rounded-none sm:rounded-3xl overflow-y-auto overscroll-contain shadow-2xl z-10 transition-transform animate-scale-up flex flex-col my-auto">
+      <div data-phone-recommendation-surface="true" className="relative w-full max-w-xl h-dvh sm:h-auto max-h-dvh sm:max-h-[calc(100dvh-3rem)] bg-slate-900 border border-slate-800 rounded-none sm:rounded-3xl overflow-y-auto overscroll-contain shadow-2xl z-10 transition-transform animate-scale-up flex flex-col my-auto">
         
         {/* Backdrop Graphic Header with gradient fade */}
         <div className="relative h-52 sm:h-72 w-full bg-slate-950 shrink-0">
@@ -118,6 +118,7 @@ export function RecommendationModal({
           {/* Close button */}
           <button 
             onClick={dismiss}
+            data-phone-recommendation-close="true"
             className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] right-[calc(0.75rem+env(safe-area-inset-right))] sm:top-4 sm:right-4 min-h-11 min-w-11 p-2.5 bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800/50 rounded-full text-slate-400 hover:text-white transition-colors backdrop-blur-md cursor-pointer touch-manipulation"
             aria-label="Dismiss recommendation"
           >
@@ -216,7 +217,7 @@ export function RecommendationModal({
             </button>
 
             {/* Secondary Option Actions */}
-            <div className="grid grid-cols-2 gap-3">
+            <div data-phone-recommendation-actions="true" className="grid grid-cols-2 gap-3">
               {/* Reroll / Pick Another Show */}
               <button
                 onClick={onReroll}

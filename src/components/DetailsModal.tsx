@@ -314,7 +314,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
       }}
     >
       <div data-tv-library-manager="true" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-none md:rounded-3xl w-full max-w-[96rem] h-dvh md:h-[94dvh] max-h-dvh md:max-h-[94dvh] overflow-hidden shadow-2xl flex flex-col overscroll-contain animate-in" onClick={(e) => e.stopPropagation()}>
-        <div data-tv-show-hero="true" className="relative min-h-[11rem] md:min-h-[12rem] bg-slate-950 shrink-0 flex flex-col justify-end px-5 pb-5 md:p-6 pt-[calc(3.5rem+env(safe-area-inset-top))]">
+        <div data-tv-show-hero="true" className="relative min-h-[10rem] md:min-h-[12rem] bg-slate-950 shrink-0 flex flex-col justify-end px-4 sm:px-5 pb-4 sm:pb-5 md:p-6 pt-[calc(3.5rem+env(safe-area-inset-top))]">
           {show.imageUrl && (
             <img decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={optimizeArtworkUrl(show.backdropUrl || show.imageUrl)} alt="" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
           )}
@@ -324,7 +324,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
             <X className="w-6 h-6" />
           </button>
 
-          <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-end gap-4 sm:gap-6 text-center sm:text-left w-full">
+          <div className="relative z-10 flex flex-row items-end gap-3 sm:gap-6 text-left w-full">
             {show.imageUrl ? (
               <img decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={optimizeArtworkUrl(show.imageUrl, "poster")} alt="" className="w-20 h-30 sm:w-24 sm:h-36 rounded-xl shadow-lg object-cover border border-slate-800 shrink-0" />
             ) : (
@@ -333,7 +333,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
             <div className="flex-1 min-w-0 pb-1">
               <span className="text-orange-400 font-bold text-xs uppercase tracking-wider">{displayStatus}</span>
               <h2 className="text-2xl md:text-4xl font-display font-bold text-white leading-tight mt-1 mb-2 drop-shadow-md">{show.name}</h2>
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-3 gap-y-1 text-xs text-slate-300">
+              <div className="flex flex-wrap items-center justify-start gap-x-3 gap-y-1 text-xs text-slate-300">
                 {displayPremiered && <span>Released {new Date(displayPremiered).getFullYear()}</span>}
                 {displayRating !== null && (
                   <span className="flex items-center gap-1 text-orange-400 font-semibold">
@@ -349,7 +349,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
         </div>
 
         <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-y-auto md:overflow-hidden overscroll-contain">
-          <div data-tv-details-sidebar="true" className="w-full md:w-72 p-6 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 md:shrink-0 md:overflow-y-auto">
+          <div data-tv-details-sidebar="true" className="w-full md:w-72 p-4 sm:p-6 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 md:shrink-0 md:overflow-y-auto">
             <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Details</h3>
             <div className="space-y-4">
               {show.summary && (
@@ -506,7 +506,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
           </div>
 
           <div data-tv-progress-panel="true" className="flex-1 flex flex-col min-w-0 md:min-h-0 bg-white/50 dark:bg-slate-900/50">
-            <div className="p-5 border-b border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 space-y-4">
               <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
                 <div>
                   <h3 className="text-2xl font-display font-bold text-slate-900 dark:text-white">
@@ -602,7 +602,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
               )}
             </div>
             
-            <div data-tv-episode-list="true" className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3">
+            <div data-tv-episode-list="true" className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4 space-y-3">
               {epsLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="flex gap-4 p-3 rounded-xl border bg-slate-100/80 dark:bg-slate-800/30 border-slate-200 dark:border-slate-700/50 animate-pulse">
@@ -718,7 +718,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                   <div
                     key={ep.id}
                     data-tv-episode-row="true"
-                    className={`flex flex-wrap lg:flex-nowrap items-center gap-4 p-4 rounded-2xl border ${
+                    className={`flex flex-wrap lg:flex-nowrap items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-2xl border ${
                       isNextUp
                         ? "bg-orange-500/10 border-orange-500/50"
                         : ep.watched
@@ -731,7 +731,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                     }`}>
                       {`S${ep.season} E${ep.number}`}
                     </div>
-                    <div className="flex-1 min-w-[240px]">
+                    <div className="flex-1 min-w-0 basis-[calc(100%-4.75rem)] lg:min-w-[240px] lg:basis-auto">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
                         <h4 className="text-slate-900 dark:text-white font-bold text-lg">{ep.name}</h4>
                         {isNextUp && <span className="rounded-md bg-orange-500 px-2 py-1 text-[11px] font-extrabold uppercase tracking-wider text-orange-950">Next Up</span>}
@@ -751,7 +751,7 @@ export function DetailsModal({ show, episodes, isOpen, onClose, onRemove, onTogg
                       )}
                     </div>
                     {released ? (
-                      <div className="flex flex-wrap items-center gap-2 shrink-0 w-full justify-end lg:w-auto">
+                      <div data-phone-episode-actions="true" className="flex flex-wrap items-center gap-2 shrink-0 w-full justify-end lg:w-auto">
                         {(() => {
                           const finalImdbId = resolvedLocalImdb || show.imdbId;
 
