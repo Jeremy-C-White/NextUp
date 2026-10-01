@@ -1376,16 +1376,27 @@
 
   [data-phone-up-next-stack] {
     isolation: isolate;
-    height: 100%;
+    align-self: stretch;
+    height: auto;
     width: 100%;
     max-width: 100%;
     min-height: 0 !important;
     min-width: 0;
-    flex: 1 1 auto;
+    flex: 1 1 0 !important;
   }
 
   [data-phone-up-next-stack] > [data-tv-up-next-hero-content] {
-    inset: 0.45rem 0.9rem 0.45rem;
+    box-sizing: border-box;
+    top: 0.45rem;
+    right: auto;
+    bottom: auto;
+    left: 0.9rem;
+    width: calc(100% - 1.8rem);
+    min-width: calc(100% - 1.8rem);
+    max-width: calc(100% - 1.8rem);
+    height: calc(100% - 0.9rem);
+    min-height: calc(100% - 0.9rem);
+    max-height: calc(100% - 0.9rem);
     box-shadow:
       0 26px 64px rgb(0 0 0 / 46%),
       0 0 0 1px rgb(255 255 255 / 8%),
@@ -1393,10 +1404,17 @@
   }
 
   [data-phone-up-next-fan-card] {
+    box-sizing: border-box;
     top: 0.45rem;
-    right: 0.9rem;
-    bottom: 0.45rem;
+    right: auto;
+    bottom: auto;
     left: 0.9rem;
+    width: calc(100% - 1.8rem);
+    min-width: calc(100% - 1.8rem);
+    max-width: calc(100% - 1.8rem);
+    height: calc(100% - 0.9rem);
+    min-height: calc(100% - 0.9rem);
+    max-height: calc(100% - 0.9rem);
     pointer-events: none;
     will-change: transform;
     backface-visibility: hidden;
@@ -1433,8 +1451,14 @@
   }
 
   [data-phone-up-next-strip-track] > button {
-    flex: 0 0 clamp(3.75rem, 18vw, 4.5rem);
+    box-sizing: border-box;
+    flex: 0 0 4.25rem;
+    width: 4.25rem;
+    min-width: 4.25rem;
+    max-width: 4.25rem;
     height: 3rem;
+    min-height: 3rem;
+    max-height: 3rem;
     border-color: rgb(255 255 255 / 16%);
     opacity: 0.68;
     box-shadow: 0 5px 14px rgb(0 0 0 / 28%);
@@ -1448,6 +1472,15 @@
     transform: translateY(-1px);
   }
 
+  [data-phone-up-next-strip-track] > button > img {
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    min-height: 100% !important;
+    max-height: 100% !important;
+  }
+
   [data-phone-up-next-fan-card][data-phone-up-next-fan-revealed="true"] {
     border-color: rgb(255 255 255 / 32%);
     box-shadow: 0 28px 64px rgb(0 0 0 / 60%), 0 0 28px rgb(249 115 22 / 10%);
@@ -1456,7 +1489,7 @@
 
   [data-phone-up-next-fan-card] img,
   [data-phone-up-next-stack] > [data-tv-up-next-hero-content] > img {
-    transform: translateZ(0) scale(1.002);
+    transform: translateZ(0);
   }
 
   [data-phone-up-next-fan-card="previous"] {
@@ -1593,13 +1626,13 @@
 }
 
 @keyframes phone-hero-enter-next {
-  from { opacity: 1; transform: translate3d(4%, 0, 0) scale(0.992); }
-  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  from { opacity: 1; transform: translate3d(4%, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 @keyframes phone-hero-enter-previous {
-  from { opacity: 1; transform: translate3d(-4%, 0, 0) scale(0.992); }
-  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  from { opacity: 1; transform: translate3d(-4%, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 @keyframes phone-card-content-settle {

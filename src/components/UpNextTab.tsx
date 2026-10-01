@@ -55,7 +55,7 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
       className="absolute overflow-hidden rounded-3xl border border-white/25 bg-[#050811] shadow-2xl md:hidden"
       style={{
         zIndex: isRevealed ? 2 : 1,
-        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 * (1 - revealProgress)}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg) scale(${0.97 + 0.03 * revealProgress})`,
+        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 * (1 - revealProgress)}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg)`,
         transition: isDragging
           ? "border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
           : "transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
@@ -138,7 +138,6 @@ export function UpNextTab({
   const safeActiveIndex = items.length > 0 ? Math.min(activeIndex, items.length - 1) : 0;
   const activeItem = items[safeActiveIndex];
   const activeTitleLogo = useTitleLogo(activeItem?.show);
-  const heroRevealProgress = Math.min(1, Math.abs(heroDragOffset) / 240);
   const ambientPreviewIndex = getCarouselPreviewIndex(safeActiveIndex, items.length, heroDragOffset);
   const queueSummary = useMemo(() => {
     const episodes = items.reduce((total, item) => total + item.backlog.unwatchedCount, 0);
@@ -545,7 +544,7 @@ export function UpNextTab({
                 data-phone-hero-swipe={heroTransitionDirection === 1 ? "next" : heroTransitionDirection === -1 ? "previous" : undefined}
                 className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging ? "transition-none" : "transition-transform duration-200 ease-out"}`}
                 style={heroDragOffset !== 0 ? {
-                  transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg) scale(${0.995 - heroRevealProgress * 0.008})`
+                  transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg)`
                 } : undefined}
                 onAnimationEnd={() => setHeroTransitionDirection(0)}
               >
