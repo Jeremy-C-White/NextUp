@@ -3,6 +3,11 @@ import type { CSSProperties } from "react";
 import { UserShow } from "../types";
 import { readCachedTitleLogo, resolveTitleLogo, TitleLogo } from "../lib/titleLogos";
 
+// Hero cards are intentionally remounted as the carousel advances. Remember
+// which logo assets have already decoded so a remounted card can paint its
+// logo immediately instead of briefly returning to the loading state.
+const decodedLogoUrls = new Set<string>();
+
 /**
  * The title's logo from the cache, looking it up once when it is not known yet.
  * Returns null while unknown or when the title has no logo.
@@ -46,7 +51,9 @@ export function HeroTitle({ name, logo, headingClassName, as: Heading = "h3", va
   // briefly for it. When the logo is found while the text is showing, the text
   // simply stays until the logo is ready.
   const [delayTextReveal] = useState(() => Boolean(logo));
-  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(() =>
+    logo && decodedLogoUrls.has(logo.url) ? logo.url : null
+  );
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const logoUrl = logo && logo.url !== failedUrl ? logo.url : null;
   const state = !logoUrl ? "none" : loadedUrl === logoUrl ? "ready" : "loading";
@@ -73,11 +80,16 @@ export function HeroTitle({ name, logo, headingClassName, as: Heading = "h3", va
           referrerPolicy="no-referrer"
           data-tv-hero-logo="true"
           data-logo-tone={logo!.tone}
-          onLoad={() => setLoadedUrl(logoUrl)}
-          onError={() => setFailedUrl(logoUrl)}
+          onLoad={() => {
+            decodedLogoUrls.add(logoUrl);
+            setLoadedUrl(logoUrl);
+          }}
+          onError={() => {
+            decodedLogoUrls.delete(logoUrl);
+            setFailedUrl(logoUrl);
+          }}
         />
       )}
     </div>
   );
 }
-

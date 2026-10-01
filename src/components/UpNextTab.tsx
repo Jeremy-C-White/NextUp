@@ -31,14 +31,17 @@ interface PhoneUpNextFanCardProps {
   side: "previous" | "next";
   dragOffset: number;
   isDragging: boolean;
+  getResumePosition: (showId: string, episodeId: string) => number | null;
 }
 
-function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging }: PhoneUpNextFanCardProps) {
+function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResumePosition }: PhoneUpNextFanCardProps) {
   const logo = useTitleLogo(item.show);
   const artworkUrl = optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl);
   const isRevealed = side === "previous" ? dragOffset > 0 : dragOffset < 0;
   const revealProgress = isRevealed ? Math.min(1, Math.abs(dragOffset) / 240) : 0;
   const direction = side === "previous" ? -1 : 1;
+  const resumePosition = getResumePosition(item.show.id, item.nextEp.id);
+  const releaseTime = getEpisodeReleaseTime(item.nextEp);
   const episodeLabel = item.show.isMovie
     ? "Feature Film"
     : `Season ${item.nextEp.season}, Episode ${item.nextEp.number} · ${item.nextEp.name}`;
@@ -75,16 +78,31 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging }: Phone
       )}
       <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/72 to-slate-950/15" />
       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/28 to-transparent" />
-      <div data-phone-up-next-fan-copy="true" className="absolute inset-x-0 bottom-0 z-10 p-5 pointer-events-none">
-        <span className="mb-3 inline-flex rounded-lg bg-orange-500 px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-wider text-orange-950">
-          {item.queueReason}
-        </span>
+      <div data-phone-up-next-fan-copy="true" className="absolute inset-0 z-10 h-full p-5 flex flex-col justify-end max-w-full pointer-events-none">
+        <div className="flex flex-wrap items-center gap-3 mb-3">
+          <span className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">
+            {item.queueReason}
+          </span>
+        </div>
         <HeroTitle
           name={item.show.name}
           logo={logo}
-          headingClassName="mb-2 line-clamp-2 text-3xl font-display font-bold leading-none tracking-tight text-white drop-shadow-lg"
+          headingClassName="text-3xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
         />
-        <p className="line-clamp-2 text-base font-semibold text-slate-100 drop-shadow">{episodeLabel}</p>
+        <p className="text-lg font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">{episodeLabel}</p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300 mb-4">
+          {releaseTime && <span>{formatUpNextAirDate(releaseTime)}</span>}
+          {(item.nextEp.runtime || item.show.runtime) && <span>{item.nextEp.runtime || item.show.runtime} min</span>}
+          {item.backlog.unwatchedCount > 1 && item.backlog.remainingMinutes > 0 && (
+            <span>{formatCatchUpDuration(item.backlog.remainingMinutes)} to catch up</span>
+          )}
+        </div>
+        <div className="flex items-center">
+          <span className="inline-flex w-full max-w-full min-h-[52px] px-5 py-3.5 bg-orange-500 text-orange-950 text-lg font-extrabold rounded-2xl items-center justify-center gap-3 whitespace-nowrap">
+            <PlayCircle className="w-7 h-7" />
+            {resumePosition !== null ? `Resume ${formatPlaybackPosition(resumePosition)}` : "Play"}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -490,6 +508,7 @@ export function UpNextTab({
                   side={side}
                   dragOffset={heroDragOffset}
                   isDragging={heroIsDragging}
+                  getResumePosition={getResumePosition}
                 />
               ))}
 
@@ -549,7 +568,7 @@ export function UpNextTab({
                     <span data-tv-hero-eyebrow="true" className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">{queueReason}</span>
                   </div>
 
-                  <div data-phone-card-settle="title">
+                  <div>
                     <HeroTitle
                       name={show.name}
                       logo={activeTitleLogo}

@@ -1152,6 +1152,10 @@
     animation: phone-title-logo-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
+  [data-phone-up-next-stack] img[data-tv-hero-logo] {
+    animation: none !important;
+  }
+
   [data-tv-hero-title][data-logo-state="loading"] {
     display: grid;
     align-items: end;
@@ -1416,12 +1420,6 @@
     transform-origin: 70% 100%;
   }
 
-  [data-phone-up-next-fan-copy] [data-tv-hero-title] {
-    --hero-logo-max-w: min(72%, 14rem);
-    --hero-logo-max-h: 4.25rem;
-    --hero-logo-gap: 0.55rem;
-  }
-
   [data-phone-hero-swipe="next"] {
     animation: phone-hero-enter-next 320ms cubic-bezier(0.22, 1, 0.36, 1);
   }
@@ -1434,7 +1432,6 @@
     animation: phone-card-content-settle 330ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  [data-phone-hero-swipe] [data-phone-card-settle="title"] { animation-delay: 24ms; }
   [data-phone-hero-swipe] [data-phone-card-settle="episode"] { animation-delay: 42ms; }
   [data-phone-hero-swipe] [data-phone-card-settle="meta"] { animation-delay: 60ms; }
   [data-phone-hero-swipe] [data-phone-card-settle="action"] { animation-delay: 78ms; }
