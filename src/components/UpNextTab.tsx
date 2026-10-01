@@ -79,7 +79,7 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
       <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/72 to-slate-950/15" />
       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/28 to-transparent" />
       <div data-phone-up-next-fan-copy="true" className="absolute inset-0 z-10 h-full p-5 flex flex-col justify-end max-w-full pointer-events-none">
-        <div className="flex flex-wrap items-center gap-3 mb-3">
+        <div data-phone-card-settle="eyebrow" className="flex flex-wrap items-center gap-3 mb-3">
           <span className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">
             {item.queueReason}
           </span>
