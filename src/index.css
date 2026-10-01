@@ -1287,18 +1287,24 @@
     bottom: 0.55rem;
     left: 0.25rem;
     pointer-events: none;
-    opacity: 0.76;
     will-change: transform;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transform-style: preserve-3d;
   }
 
   [data-phone-up-next-fan-card="previous"] {
-    transform: translate3d(-0.45rem, 0.35rem, 0) rotate(-2.75deg) scale(0.97);
     transform-origin: 30% 100%;
   }
 
   [data-phone-up-next-fan-card="next"] {
-    transform: translate3d(0.45rem, 0.35rem, 0) rotate(2.75deg) scale(0.97);
     transform-origin: 70% 100%;
+  }
+
+  [data-phone-up-next-fan-copy] [data-tv-hero-title] {
+    --hero-logo-max-w: min(72%, 14rem);
+    --hero-logo-max-h: 4.25rem;
+    --hero-logo-gap: 0.55rem;
   }
 
   [data-phone-hero-swipe="next"] {
@@ -1400,12 +1406,12 @@
 }
 
 @keyframes phone-hero-enter-next {
-  from { opacity: 0.35; transform: translate3d(18%, 0, 0) scale(0.985); }
+  from { opacity: 1; transform: translate3d(4%, 0, 0) scale(0.992); }
   to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 
 @keyframes phone-hero-enter-previous {
-  from { opacity: 0.35; transform: translate3d(-18%, 0, 0) scale(0.985); }
+  from { opacity: 1; transform: translate3d(-4%, 0, 0) scale(0.992); }
   to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 

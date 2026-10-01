@@ -25,6 +25,67 @@ interface UpNextTabProps {
   memoryKey?: string;
 }
 
+interface PhoneUpNextFanCardProps {
+  item: SmartUpNextItem;
+  index: number;
+  side: "previous" | "next";
+  dragOffset: number;
+}
+
+function PhoneUpNextFanCard({ item, index, side, dragOffset }: PhoneUpNextFanCardProps) {
+  const logo = useTitleLogo(item.show);
+  const artworkUrl = optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl);
+  const isRevealed = side === "previous" ? dragOffset > 0 : dragOffset < 0;
+  const revealProgress = isRevealed ? Math.min(1, Math.abs(dragOffset) / 240) : 0;
+  const direction = side === "previous" ? -1 : 1;
+  const episodeLabel = item.show.isMovie
+    ? "Feature Film"
+    : `Season ${item.nextEp.season}, Episode ${item.nextEp.number} · ${item.nextEp.name}`;
+
+  return (
+    <div
+      data-phone-up-next-fan-card={side}
+      data-phone-up-next-fan-index={index}
+      data-phone-up-next-fan-revealed={isRevealed ? "true" : "false"}
+      aria-hidden="true"
+      className="absolute overflow-hidden rounded-3xl border border-white/25 bg-[#050811] shadow-2xl md:hidden"
+      style={{
+        zIndex: isRevealed ? 2 : 1,
+        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 - 3.2 * revealProgress}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg) scale(${0.97 + 0.025 * revealProgress})`
+      }}
+    >
+      {artworkUrl ? (
+        <img
+          decoding="async"
+          referrerPolicy="no-referrer"
+          loading="eager"
+          fetchPriority="low"
+          src={artworkUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover object-center"
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950 text-6xl font-bold text-slate-700">
+          {item.show.name?.[0] || "?"}
+        </div>
+      )}
+      <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/72 to-slate-950/15" />
+      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/28 to-transparent" />
+      <div data-phone-up-next-fan-copy="true" className="absolute inset-x-0 bottom-0 z-10 p-5 pointer-events-none">
+        <span className="mb-3 inline-flex rounded-lg bg-orange-500 px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-wider text-orange-950">
+          {item.queueReason}
+        </span>
+        <HeroTitle
+          name={item.show.name}
+          logo={logo}
+          headingClassName="mb-2 line-clamp-2 text-3xl font-display font-bold leading-none tracking-tight text-white drop-shadow-lg"
+        />
+        <p className="line-clamp-2 text-base font-semibold text-slate-100 drop-shadow">{episodeLabel}</p>
+      </div>
+    </div>
+  );
+}
+
 export function UpNextTab({
   items,
   isReady,
@@ -420,28 +481,13 @@ export function UpNextTab({
               className="relative shrink-0 w-full md:w-[46%] min-h-[410px] sm:min-h-[420px] rounded-3xl md:rounded-[2rem] overflow-visible md:overflow-hidden bg-transparent md:bg-slate-950 border border-transparent md:border-slate-700 shadow-none md:shadow-xl"
             >
               {fanItems.map(({ item, index, side }) => (
-                <div
+                <PhoneUpNextFanCard
                   key={`fan:${side}:${item.show.id}:${item.nextEp.id}`}
-                  data-phone-up-next-fan-card={side}
-                  data-phone-up-next-fan-index={index}
-                  aria-hidden="true"
-                  className="absolute z-0 overflow-hidden rounded-3xl border border-white/15 bg-slate-950 shadow-2xl md:hidden"
-                >
-                  {item.show.imageUrl ? (
-                    <img
-                      decoding="async"
-                      referrerPolicy="no-referrer"
-                      loading="eager"
-                      fetchPriority="low"
-                      src={optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl)}
-                      alt=""
-                      className="absolute inset-0 h-full w-full object-cover opacity-75"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-6xl font-bold text-slate-700">{item.show.name?.[0] || "?"}</div>
-                  )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/15 to-transparent" />
-                </div>
+                  item={item}
+                  index={index}
+                  side={side}
+                  dragOffset={heroDragOffset}
+                />
               ))}
 
               <button
@@ -468,14 +514,13 @@ export function UpNextTab({
                 key={`${show.id}:${nextEp.id}`}
                 data-tv-up-next-hero-content="true"
                 data-phone-hero-swipe={heroTransitionDirection === 1 ? "next" : heroTransitionDirection === -1 ? "previous" : undefined}
-                className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging ? "transition-none" : "transition-[transform,opacity] duration-200 ease-out"}`}
+                className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging ? "transition-none" : "transition-transform duration-200 ease-out"}`}
                 style={heroDragOffset !== 0 ? {
-                  transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg) scale(0.99)`,
-                  opacity: 1 - Math.min(Math.abs(heroDragOffset) / 500, 0.28)
+                  transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg) scale(0.99)`
                 } : undefined}
                 onAnimationEnd={() => setHeroTransitionDirection(0)}
               >
-                {show.imageUrl ? (
+                {show.backdropUrl || show.imageUrl ? (
                   <img
                     decoding="async"
                     referrerPolicy="no-referrer"
@@ -483,7 +528,7 @@ export function UpNextTab({
                     fetchPriority="high"
                     src={optimizeArtworkUrl(show.backdropUrl || show.imageUrl)}
                     alt=""
-                    className="absolute inset-0 w-full h-full object-cover object-center opacity-90 pointer-events-none"
+                    className="absolute inset-0 w-full h-full object-cover object-center pointer-events-none"
                   />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center text-7xl font-bold text-slate-700 pointer-events-none">{show.name?.[0] || "?"}</div>
