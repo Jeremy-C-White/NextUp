@@ -19,6 +19,7 @@ const RecommendationModal = lazy(() => import("./components/RecommendationModal"
 import { UserMenu } from "./components/UserMenu";
 import { DiscoverErrorBoundary } from "./components/DiscoverErrorBoundary";
 import { ResumePlaybackDialog } from "./components/ResumePlaybackDialog";
+import { AmbientBackdrop } from "./components/AmbientBackdrop";
 import { ComingTab } from "./components/ComingTab";
 import { buildComingSchedule } from "./lib/comingSchedule";
 import { LibraryFilter, normalizeLibraryFilter } from "./lib/libraryShelves";
@@ -54,6 +55,7 @@ import {
 import type { RecommendationFeedbackKind, RecommendationProfile, RecommendationSource } from "./lib/recommendationPreferences";
 import { parseLibraryShowRecord } from "./lib/libraryData";
 import { readThemeMusicEnabled, saveThemeMusicEnabled } from "./lib/tvThemes";
+import { readAutoSkipEnabled, saveAutoSkipEnabled } from "./lib/autoSkip";
 
 interface PendingPlaybackChoice {
   request: PlaybackRequest;
@@ -436,6 +438,7 @@ const loadWithFallback = async (
       : "added";
   });
   const [themeMusicEnabled, setThemeMusicEnabled] = useState(readThemeMusicEnabled);
+  const [autoSkipEnabled, setAutoSkipEnabled] = useState(readAutoSkipEnabled);
   const [recommendedPick, setRecommendedPick] = useState<{ show: UserShow, nextEp: UserEpisode, progress: number } | null>(null);
   const [isDiscoverLoading, setIsDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -471,6 +474,10 @@ const loadWithFallback = async (
   useEffect(() => {
     saveThemeMusicEnabled(themeMusicEnabled);
   }, [themeMusicEnabled]);
+
+  useEffect(() => {
+    saveAutoSkipEnabled(autoSkipEnabled);
+  }, [autoSkipEnabled]);
 
   useEffect(() => {
     if (!user?.uid) {
@@ -1690,6 +1697,7 @@ const loadWithFallback = async (
 
   return (
     <div className={`nextup-cinema min-h-dvh bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans pb-[calc(6rem+env(safe-area-inset-bottom))] ${activeTab === "up-next" ? "tv-up-next-shell" : ""}`}>
+      <AmbientBackdrop active={activeTab === "up-next"} />
       {/* Topbar */}
       <header data-tv-app-header="true" className="sticky top-0 z-40 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl border-b border-slate-200/60 dark:border-slate-800/60 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-8 pt-[calc(1rem+env(safe-area-inset-top))] pb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -2098,6 +2106,8 @@ const loadWithFallback = async (
             shows={shows}
             themeMusicEnabled={themeMusicEnabled}
             onThemeMusicEnabledChange={setThemeMusicEnabled}
+            autoSkipEnabled={autoSkipEnabled}
+            onAutoSkipEnabledChange={setAutoSkipEnabled}
           />
         </Suspense>
       )}
@@ -2160,6 +2170,7 @@ const loadWithFallback = async (
             nextRequest={nextPlaybackRequest}
             alternativeRequests={creditsUpNextRequests}
             backRequestToken={playerBackRequest}
+            autoSkipEnabled={autoSkipEnabled}
             onEpisodeComplete={handlePlaybackCompleted}
             onPlayNext={() => {
               if (nextPlaybackRequest) setPlaybackRequest(nextPlaybackRequest);

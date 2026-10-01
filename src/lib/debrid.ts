@@ -1,5 +1,6 @@
 import { PlaybackCandidate } from "../types";
 import { fetchThroughProxy, isWebOSTV } from "./webos";
+import { getSourceFingerprint } from "./sourceMemory";
 
 export interface StreamOption {
   name?: string;
@@ -1402,13 +1403,33 @@ async function fetchBestStreamImpl(
       const parsedInfo = parseStreamInfo(stream);
       const audioLanguage = getStreamAudioLanguage(stream);
       const mediaProfile = getStreamMediaProfile(stream);
+      const infoHash = compactText(stream.infoHash || stream.streamData?.torrent?.infoHash).toLowerCase() || undefined;
+      const fileIdx = stream.fileIdx ?? stream.streamData?.torrent?.fileIdx;
+      const filename = compactText(
+        stream.streamData?.filename
+        || stream.behaviorHints?.filename
+        || parsedInfo.filename
+      ) || undefined;
+      const releaseName = compactText(
+        stream.streamData?.folderName
+        || stream.title?.split("\n", 1)[0]
+        || filename
+      ) || undefined;
+      const sizeBytes = getStreamSizeBytes(stream);
 
       return {
-        id: stream.infoHash?.trim()
-          ? `${stream.infoHash.trim().toLowerCase()}:${stream.fileIdx ?? "unknown"}:${directUrl}`
+        id: infoHash
+          ? `${infoHash}:${fileIdx ?? "unknown"}:${directUrl}`
           : directUrl || `candidate-${index}`,
 
         url: directUrl,
+
+        fingerprint: getSourceFingerprint({ infoHash, fileIdx, filename, sizeBytes }),
+        infoHash,
+        fileIdx,
+        bingeGroup: compactText(stream.behaviorHints?.bingeGroup) || undefined,
+        filename,
+        releaseName,
 
         /*
          * Always provide visible text so the UI never renders an
@@ -1418,7 +1439,7 @@ async function fetchBestStreamImpl(
 
         quality: parsedInfo.quality || quality,
 
-        sizeBytes: getStreamSizeBytes(stream),
+        sizeBytes,
 
         container: browserCompatibility === "compatible"
           ? "web-compatible"

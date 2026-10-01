@@ -84,6 +84,13 @@ export interface PlaybackCandidate {
   id: string;
   url: string;
   title: string;
+  /** Stable, URL-free identity used to remember a proven source. */
+  fingerprint?: string;
+  infoHash?: string;
+  fileIdx?: number;
+  bingeGroup?: string;
+  filename?: string;
+  releaseName?: string;
   quality?: string;
   sizeBytes?: number;
   container?: string;

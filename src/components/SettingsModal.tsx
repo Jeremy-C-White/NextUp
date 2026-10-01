@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { UserShow } from '../types';
-import { Download, Upload, X, CheckCircle2, AlertCircle, Bell, BellRing, Smartphone, Server, Captions, Music2 } from 'lucide-react';
+import { Download, Upload, X, CheckCircle2, AlertCircle, Bell, BellRing, Smartphone, Server, Captions, Music2, SkipForward } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { writeBatch, doc } from 'firebase/firestore';
 import { 
@@ -27,6 +27,8 @@ interface SettingsModalProps {
   shows: UserShow[];
   themeMusicEnabled: boolean;
   onThemeMusicEnabledChange: (enabled: boolean) => void;
+  autoSkipEnabled: boolean;
+  onAutoSkipEnabledChange: (enabled: boolean) => void;
 }
 
 export function SettingsModal({
@@ -34,7 +36,9 @@ export function SettingsModal({
   onClose,
   shows,
   themeMusicEnabled,
-  onThemeMusicEnabledChange
+  onThemeMusicEnabledChange,
+  autoSkipEnabled,
+  onAutoSkipEnabledChange
 }: SettingsModalProps) {
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
@@ -411,6 +415,38 @@ export function SettingsModal({
           >
             <Music2 className="w-4 h-4" />
             {themeMusicEnabled ? 'Mute Theme Music' : 'Enable Theme Music'}
+          </button>
+        </div>
+
+        <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <SkipForward className="w-5 h-5 text-orange-500" />
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">Automatic Episode Skips</h3>
+            </div>
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+              autoSkipEnabled
+                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                : 'bg-slate-500/10 text-slate-500 border-slate-500/20'
+            }`}>
+              {autoSkipEnabled ? 'On' : 'Manual'}
+            </span>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 text-sm mb-4">
+            Let each detected intro or recap play for 10 seconds, then jump past the rest. The Skip button stays available immediately, and credits keep the normal Next Up countdown.
+          </p>
+          <button
+            type="button"
+            onClick={() => onAutoSkipEnabledChange(!autoSkipEnabled)}
+            aria-pressed={autoSkipEnabled}
+            className={`w-full min-h-12 py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+              autoSkipEnabled
+                ? 'bg-emerald-500 text-emerald-950 shadow-lg shadow-emerald-500/20'
+                : 'bg-orange-500 text-white shadow-lg shadow-orange-500/25 active:scale-95'
+            }`}
+          >
+            <SkipForward className="w-4 h-4" />
+            {autoSkipEnabled ? 'Auto-skip Intros & Recaps: On' : 'Turn On Auto-skip'}
           </button>
         </div>
 

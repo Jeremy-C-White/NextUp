@@ -1079,6 +1079,61 @@
     overscroll-behavior-y: none;
   }
 
+  [data-tv-hero-title] {
+    position: relative;
+    --hero-logo-max-w: min(100%, 22rem);
+    --hero-logo-max-h: 6.25rem;
+    --hero-logo-gap: 0.8rem;
+  }
+
+  img[data-tv-hero-logo] {
+    display: block;
+    width: min(var(--hero-logo-max-w), calc(var(--hero-logo-max-h) * var(--logo-ar, 4)));
+    max-width: 100%;
+    height: auto;
+    aspect-ratio: var(--logo-ar, 4);
+    object-fit: contain;
+    object-position: left bottom;
+    margin-bottom: var(--hero-logo-gap);
+    opacity: 0;
+    filter: drop-shadow(0 6px 22px rgb(0 0 0 / 55%));
+    pointer-events: none;
+  }
+
+  img[data-tv-hero-logo][data-logo-tone="dark"] {
+    filter: brightness(0) invert(1) drop-shadow(0 6px 22px rgb(0 0 0 / 55%));
+  }
+
+  [data-tv-hero-title][data-logo-state="ready"] > img[data-tv-hero-logo] {
+    opacity: 1;
+    animation: phone-title-logo-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  [data-tv-hero-title][data-logo-state="loading"] {
+    display: grid;
+    align-items: end;
+  }
+
+  [data-tv-hero-title][data-logo-state="loading"] > * {
+    grid-area: 1 / 1;
+  }
+
+  [data-tv-hero-title][data-logo-state="loading"] > [data-tv-hero-title-text] {
+    margin: 0 0 var(--hero-logo-gap) !important;
+  }
+
+  [data-tv-hero-title][data-logo-state="ready"] > [data-tv-hero-title-text] {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+  }
+
   .nextup-cinema > [data-tv-main] {
     padding-left: max(1rem, env(safe-area-inset-left)) !important;
     padding-right: max(1rem, env(safe-area-inset-right)) !important;
@@ -1274,6 +1329,55 @@
   [data-phone-player-actions] > button {
     max-width: 5rem;
   }
+}
+
+.nextup-cinema.tv-up-next-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.nextup-cinema [data-tv-ambient] {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.nextup-cinema [data-tv-ambient] canvas {
+  position: absolute;
+  inset: -6%;
+  width: 112%;
+  height: 112%;
+  opacity: 0;
+  transition: opacity 850ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nextup-cinema [data-tv-ambient] canvas[data-ambient-visible="true"] {
+  opacity: 0.32;
+}
+
+.nextup-cinema [data-tv-ambient][data-ambient-active="false"] canvas {
+  opacity: 0;
+}
+
+.nextup-cinema [data-tv-ambient-shade] {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgb(2 6 23 / 80%) 0%, rgb(2 6 23 / 30%) 38%, rgb(2 6 23 / 82%) 100%),
+    radial-gradient(ellipse at 35% 36%, transparent 0%, rgb(2 6 23 / 48%) 70%, rgb(2 6 23 / 78%) 100%);
+}
+
+.nextup-cinema.tv-up-next-shell > :not([data-tv-ambient]) {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes phone-title-logo-in {
+  from { opacity: 0; transform: translate3d(0, 6px, 0) scale(0.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 
 @media (max-width: 359px) {

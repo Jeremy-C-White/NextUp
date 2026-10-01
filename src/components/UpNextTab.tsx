@@ -9,6 +9,9 @@ import { formatUpNextAirDate, SmartUpNextItem } from "../lib/upNext";
 import { formatCatchUpDuration } from "../lib/episodeBacklog";
 import { consumeCarouselWheel, createCarouselWheelState, getCarouselSwipeDirection } from "../lib/carouselWheel";
 import { getAdjacentCarouselIndexes } from "../lib/carouselPreload";
+import { HeroTitle, useTitleLogo } from "./HeroTitle";
+import { prefetchTitleLogos } from "../lib/titleLogos";
+import { setAmbientArtwork } from "../lib/ambientArtwork";
 import { TvThemePlayer, TvThemePlaybackStatus, TvThemePlayerHandle } from "./TvThemePlayer";
 
 interface UpNextTabProps {
@@ -50,6 +53,7 @@ export function UpNextTab({
   const [heroTransitionDirection, setHeroTransitionDirection] = useState<-1 | 0 | 1>(0);
   const safeActiveIndex = items.length > 0 ? Math.min(activeIndex, items.length - 1) : 0;
   const activeItem = items[safeActiveIndex];
+  const activeTitleLogo = useTitleLogo(activeItem?.show);
   const queueSummary = useMemo(() => {
     const episodes = items.reduce((total, item) => total + item.backlog.unwatchedCount, 0);
     return `${items.length} ${items.length === 1 ? "show" : "shows"} · ${episodes} unwatched ${episodes === 1 ? "episode" : "episodes"}`;
@@ -136,7 +140,37 @@ export function UpNextTab({
   useEffect(() => () => {
     heroArtworkPreloadsRef.current.clear();
     if (swipeCommitTimerRef.current !== null) window.clearTimeout(swipeCommitTimerRef.current);
+    setAmbientArtwork(null);
   }, []);
+
+  useEffect(() => {
+    if (!activeItem) {
+      setAmbientArtwork(null);
+      return;
+    }
+    const artwork = optimizeArtworkUrl(activeItem.show.backdropUrl || activeItem.show.imageUrl);
+    const timer = window.setTimeout(() => setAmbientArtwork(artwork || null), 240);
+    return () => window.clearTimeout(timer);
+  }, [activeItem?.show.id, activeItem?.show.backdropUrl, activeItem?.show.imageUrl]);
+
+  const logoPrefetchKey = items.map(item => item.show.id).join("|");
+  useEffect(() => {
+    if (!items.length) return;
+    const controller = new AbortController();
+    const prioritized = [
+      ...getAdjacentCarouselIndexes(safeActiveIndex, items.length).map(index => items[index]),
+      ...items
+    ]
+      .filter((item, index, all) => item && all.findIndex(other => other.show.id === item.show.id) === index)
+      .map(item => item.show);
+    const timer = window.setTimeout(() => {
+      void prefetchTitleLogos(prioritized, controller.signal);
+    }, 900);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [logoPrefetchKey, safeActiveIndex]);
 
   useEffect(() => {
     if (warmTimerRef.current !== null) window.clearTimeout(warmTimerRef.current);
@@ -467,9 +501,11 @@ export function UpNextTab({
                     <span data-tv-hero-eyebrow="true" className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">{queueReason}</span>
                   </div>
 
-                  <h3 className="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2">
-                    {show.name}
-                  </h3>
+                  <HeroTitle
+                    name={show.name}
+                    logo={activeTitleLogo}
+                    headingClassName="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
+                  />
                   <p className="text-lg md:text-xl font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">
                     {episodeLabel}
                   </p>

@@ -40,6 +40,36 @@ import {
   readPlaybackProgress,
   writePlaybackProgress
 } from "../lib/playbackProgress";
+import {
+  applySourceMemory,
+  createSourceAffinityHint,
+  getSourceFailurePenaltyDecision,
+  getSourceMediaKey,
+  getSourceShowKey,
+  isRememberedCandidate,
+  rankSourceAffinity,
+  readSourceMemory,
+  recordSourceFailure,
+  saveSourcePreference,
+  SourceAffinityHint,
+  SourceFailureReason
+} from "../lib/sourceMemory";
+import { formatPlaybackDiagnostic, getPlaybackSourceDiagnosticFields } from "../lib/playbackDiagnostics";
+import {
+  getBufferedEndSeconds,
+  getStartupAttemptLimitMs,
+  hasMeaningfulStartupProgress,
+  PROGRESSING_STARTUP_TIMEOUT_MS
+} from "../lib/startupProbe";
+import {
+  AUTO_SKIP_DELAY_SECONDS,
+  AUTO_SKIP_MINIMUM_REMAINDER_SECONDS,
+  shouldAutomaticallySkipSegment
+} from "../lib/autoSkip";
+import { getSkipDBSegments, mergeSkipSegments, needsSkipDBFallback } from "../lib/skipdb";
+
+const SOURCE_PROOF_MEDIA_SECONDS = 8;
+const SOURCE_PROOF_STALL_RESET_MS = 3_000;
 
 const formatBytes = (bytes?: number) => {
   if (!bytes) return "";
@@ -205,6 +235,7 @@ interface VideoPlayerModalProps {
   nextRequest: PlaybackRequest | null;
   alternativeRequests: PlaybackRequest[];
   backRequestToken: number;
+  autoSkipEnabled: boolean;
   onEpisodeComplete: () => void;
   onPlayNext: () => void;
   onPlayAlternative: (request: PlaybackRequest) => void;
@@ -223,7 +254,7 @@ interface WebOSAudioTrackList {
   item?: (index: number) => WebOSAudioTrack | null;
 }
 
-export function VideoPlayerModal({ request, nextRequest, alternativeRequests, backRequestToken, onEpisodeComplete, onPlayNext, onPlayAlternative, onClose }: VideoPlayerModalProps) {
+export function VideoPlayerModal({ request, nextRequest, alternativeRequests, backRequestToken, autoSkipEnabled, onEpisodeComplete, onPlayNext, onPlayAlternative, onClose }: VideoPlayerModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const playNextButtonRef = useRef<HTMLButtonElement>(null);
   const alternativeButtonRef = useRef<HTMLButtonElement>(null);
@@ -267,7 +298,9 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [playbackClock, setPlaybackClock] = useState({ current: 0, duration: 0, playing: false });
   const [introDBSegments, setIntroDBSegments] = useState<IntroDBSegments>({});
+  const [introDBLookupStatus, setIntroDBLookupStatus] = useState<"idle" | "pending" | "done" | "failed">("idle");
   const [ignoredSegmentTypes, setIgnoredSegmentTypes] = useState<IntroDBSegmentType[]>([]);
+  const [autoSkipNotice, setAutoSkipNotice] = useState<string | null>(null);
   
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const playAttemptedForSourceRef = useRef(false);
@@ -291,6 +324,20 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const externalSubtitleAbortRef = useRef<AbortController | null>(null);
   const externalSubtitleLookupKeyRef = useRef("");
   const externalSubtitleLookupStateRef = useRef<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const autoSkipNoticeTimerRef = useRef<number | null>(null);
+  const skipDBLookupKeyRef = useRef<string | null>(null);
+  const sourceMemoryMediaKeyRef = useRef<string | null>(null);
+  const sourceMemoryShowKeyRef = useRef<string | null>(null);
+  const rememberedCandidateIdRef = useRef<string | null>(null);
+  const currentAttemptManualRef = useRef(false);
+  const currentProvenCandidateRef = useRef<PlaybackCandidate | null>(null);
+  const pendingNextSourceAffinityRef = useRef<{ episodeId: string; hint: SourceAffinityHint } | null>(null);
+  const playbackProofRef = useRef<{
+    candidateId: string | null;
+    baselineSeconds: number | null;
+    seeking: boolean;
+    saved: boolean;
+  }>({ candidateId: null, baselineSeconds: null, seeking: false, saved: false });
 
   // Mutable refs to eliminate stale closure issues in timers & event handlers
   const playableCandidatesRef = useRef<PlaybackCandidate[]>([]);
@@ -306,6 +353,110 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   }, [vlcCandidates]);
   useEffect(() => { candidateIndexRef.current = candidateIndex; }, [candidateIndex]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
+
+  const resetPlaybackProof = useCallback((candidateId: string | null = null) => {
+    playbackProofRef.current = {
+      candidateId,
+      baselineSeconds: null,
+      seeking: false,
+      saved: false
+    };
+  }, []);
+
+  const recordCurrentSourceFailure = useCallback((reason: SourceFailureReason, observedMs?: number) => {
+    const currentIndex = candidateIndexRef.current;
+    const currentSources = playableCandidatesRef.current;
+    const candidate = currentSources[currentIndex];
+    const details = {
+      reason,
+      observedMs: observedMs === undefined ? undefined : Math.round(observedMs),
+      ...getPlaybackSourceDiagnosticFields(candidate, currentIndex, currentSources.length)
+    };
+
+    if (currentAttemptManualRef.current) {
+      console.info(formatPlaybackDiagnostic("penalty skipped", { ...details, why: "manual-source-attempt" }));
+      return;
+    }
+
+    const decision = getSourceFailurePenaltyDecision(reason, {
+      observedMs,
+      sourceProven: playbackProofRef.current.saved,
+      browserOnline: navigator.onLine
+    });
+    if (!decision.record) {
+      console.info(formatPlaybackDiagnostic("penalty skipped", { ...details, why: decision.reason }));
+      return;
+    }
+
+    const userId = auth.currentUser?.uid;
+    const mediaKey = sourceMemoryMediaKeyRef.current;
+    if (!userId || !mediaKey || !candidate?.fingerprint) {
+      console.info(formatPlaybackDiagnostic("penalty skipped", {
+        ...details,
+        why: "missing-user-title-or-stable-fingerprint"
+      }));
+      return;
+    }
+
+    try {
+      const recorded = recordSourceFailure(
+        window.localStorage,
+        userId,
+        mediaKey,
+        candidate.fingerprint,
+        reason
+      );
+      console.info(formatPlaybackDiagnostic(recorded ? "penalty recorded" : "penalty skipped", {
+        ...details,
+        why: recorded ? "eligible-source-failure" : "storage-unavailable"
+      }));
+    } catch {
+      console.info(formatPlaybackDiagnostic("penalty skipped", { ...details, why: "storage-unavailable" }));
+    }
+  }, []);
+
+  const confirmCurrentSourceIfProven = useCallback((video: HTMLVideoElement) => {
+    if (!sourceValidatedRef.current || video.paused) return;
+    const candidate = playableCandidatesRef.current[candidateIndexRef.current];
+    const userId = auth.currentUser?.uid;
+    const mediaKey = sourceMemoryMediaKeyRef.current;
+    if (!candidate?.fingerprint || !userId || !mediaKey) return;
+
+    const proof = playbackProofRef.current;
+    if (proof.candidateId !== candidate.id) {
+      playbackProofRef.current = {
+        candidateId: candidate.id,
+        baselineSeconds: video.currentTime,
+        seeking: false,
+        saved: false
+      };
+      return;
+    }
+    if (proof.saved || proof.seeking || !Number.isFinite(video.currentTime)) return;
+    if (proof.baselineSeconds === null || video.currentTime < proof.baselineSeconds) {
+      proof.baselineSeconds = video.currentTime;
+      return;
+    }
+    if (video.currentTime - proof.baselineSeconds < SOURCE_PROOF_MEDIA_SECONDS) return;
+
+    try {
+      const episodeSaved = saveSourcePreference(window.localStorage, userId, mediaKey, candidate);
+      const showKey = sourceMemoryShowKeyRef.current;
+      const showSaved = showKey
+        ? saveSourcePreference(window.localStorage, userId, showKey, candidate)
+        : false;
+      if (episodeSaved || showSaved) {
+        console.info(formatPlaybackDiagnostic("source saved as preferred", {
+          scope: episodeSaved && showSaved ? "episode-and-show" : episodeSaved ? "episode" : "show",
+          ...getPlaybackSourceDiagnosticFields(candidate, candidateIndexRef.current, playableCandidatesRef.current.length)
+        }));
+      }
+    } catch {
+      // Source memory is an optimization and never blocks playback.
+    }
+    proof.saved = true;
+    currentProvenCandidateRef.current = candidate;
+  }, []);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -732,6 +883,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     const selected = playableCandidates[index];
     if (!selected) return;
 
+    currentAttemptManualRef.current = true;
+    resetPlaybackProof(selected.id);
     rememberSameSessionFailoverPosition();
     persistPlaybackProgress(true);
     resetSubtitleAssist();
@@ -821,6 +974,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
     if (currentIndex + 1 < currentSources.length) {
       const nextIdx = currentIndex + 1;
+      currentAttemptManualRef.current = manual;
+      resetPlaybackProof(currentSources[nextIdx]?.id || null);
       setCandidateIndex(nextIdx);
       candidateIndexRef.current = nextIdx;
       resetAttemptState();
@@ -828,6 +983,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       setStatusText(`Checking source ${nextIdx + 1} of ${currentSources.length}...`);
     } else if (manual && currentSources.length > 0) {
       const nextIdx = currentSources.length > 1 ? 0 : currentIndex;
+      currentAttemptManualRef.current = true;
+      resetPlaybackProof(currentSources[nextIdx]?.id || null);
       setCandidateIndex(nextIdx);
       candidateIndexRef.current = nextIdx;
       resetAttemptState();
@@ -852,7 +1009,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       setPlaybackError("Every phone-ready source was tried. Please refresh the source search.");
       setIsLoading(false);
     }
-  }, [persistPlaybackProgress, rememberSameSessionFailoverPosition, resetSubtitleAssist, showVlcFallback]);
+  }, [persistPlaybackProgress, rememberSameSessionFailoverPosition, resetPlaybackProof, resetSubtitleAssist, showVlcFallback]);
 
   /**
    * Real-Debrid can occasionally return a short placeholder video stating that
@@ -874,6 +1031,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       setAutoplayBlocked(false);
       setIsLoading(true);
       setStatusText("Skipping an unavailable source...");
+      recordCurrentSourceFailure("invalid");
 
       // Defer the source change until the current media event finishes.
       window.setTimeout(() => handleNextCandidate(), 0);
@@ -890,7 +1048,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     }
 
     return 'valid';
-  }, [handleNextCandidate, isIOS]);
+  }, [handleNextCandidate, isIOS, recordCurrentSourceFailure]);
 
   const ensureEnglishAudio = useCallback((video: HTMLVideoElement): boolean => {
     const audioTracks = (video as HTMLVideoElement & { audioTracks?: WebOSAudioTrackList }).audioTracks;
@@ -967,7 +1125,14 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setSubtitleStatus("Automatic subtitles ready");
     setPlaybackClock({ current: 0, duration: 0, playing: false });
     setIntroDBSegments({});
+    setIntroDBLookupStatus("idle");
+    skipDBLookupKeyRef.current = null;
     setIgnoredSegmentTypes([]);
+    setAutoSkipNotice(null);
+    if (autoSkipNoticeTimerRef.current !== null) {
+      window.clearTimeout(autoSkipNoticeTimerRef.current);
+      autoSkipNoticeTimerRef.current = null;
+    }
     setShowUI(true);
     lastClockSecondRef.current = -1;
     lastProgressSaveSecondRef.current = -1;
@@ -978,6 +1143,12 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     candidateAdvanceLockRef.current = false;
     playAttemptedForSourceRef.current = false;
     resolvedImdbIdRef.current = null;
+    sourceMemoryMediaKeyRef.current = null;
+    sourceMemoryShowKeyRef.current = null;
+    rememberedCandidateIdRef.current = null;
+    currentAttemptManualRef.current = false;
+    currentProvenCandidateRef.current = null;
+    resetPlaybackProof();
 
     const userId = auth.currentUser?.uid;
     if (userId) {
@@ -1059,15 +1230,49 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           throw new Error("Unable to locate a valid IMDb ID for this title. Streams cannot be loaded.");
         }
         resolvedImdbIdRef.current = activeImdbId;
+        const sourceMediaKey = getSourceMediaKey(
+          activeImdbId,
+          Boolean(request.isMovie),
+          request.season,
+          request.number
+        );
+        sourceMemoryMediaKeyRef.current = sourceMediaKey;
+        const sourceShowKey = request.isMovie ? null : getSourceShowKey(activeImdbId);
+        sourceMemoryShowKeyRef.current = sourceShowKey;
+        const sourceMemory = userId && sourceMediaKey
+          ? readSourceMemory(window.localStorage, userId, sourceMediaKey)
+          : null;
+        const showSourceMemory = userId && sourceShowKey
+          ? readSourceMemory(window.localStorage, userId, sourceShowKey)
+          : null;
+        const pendingAffinity = pendingNextSourceAffinityRef.current;
+        const nextEpisodeAffinityHint = pendingAffinity?.episodeId === request.episodeId
+          ? pendingAffinity.hint
+          : null;
+        // Consume the hint even when lookup later fails, so it cannot affect an unrelated title.
+        pendingNextSourceAffinityRef.current = null;
+        const showSourceAffinityHint = !sourceMemory?.preferred && !nextEpisodeAffinityHint
+          ? createSourceAffinityHint(showSourceMemory?.preferred)
+          : null;
+        const selectedSourceAffinityHint = nextEpisodeAffinityHint || showSourceAffinityHint;
+        const sourceAffinityOrigin = nextEpisodeAffinityHint
+          ? "next-episode"
+          : showSourceAffinityHint
+            ? "show-history"
+            : null;
 
         if (!request.isMovie) {
+          setIntroDBLookupStatus("pending");
           void getIntroDBSegments(activeImdbId, request.season, request.number, controller.signal)
             .then(segments => {
-              if (active) setIntroDBSegments(segments);
+              if (!active) return;
+              setIntroDBSegments(segments);
+              setIntroDBLookupStatus("done");
             })
             .catch(error => {
               if (error instanceof DOMException && error.name === "AbortError") return;
               console.warn("IntroDB timestamps are unavailable for this episode", error);
+              if (active) setIntroDBLookupStatus("failed");
             });
         }
         
@@ -1093,8 +1298,46 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           throw new Error("No playable sources found.");
         }
 
-        const compatibleSources = selectPhonePlaybackCandidates(found);
+        // The iPhone compatibility ranking remains authoritative. Memory and
+        // same-release affinity can only reorder sources that already passed
+        // the native MP4/HLS/browser eligibility filter.
+        const phoneCompatibleSources = selectPhonePlaybackCandidates(found);
+        const memoryOrderedSources = applySourceMemory(phoneCompatibleSources, sourceMemory);
+        const rememberedBeforeAffinity = isRememberedCandidate(memoryOrderedSources[0], sourceMemory);
+        const affinityResult = rankSourceAffinity(
+          memoryOrderedSources,
+          selectedSourceAffinityHint,
+          {
+            protectedFingerprint: rememberedBeforeAffinity ? sourceMemory?.preferred?.fingerprint : undefined,
+            penalties: sourceMemory?.penalties
+          }
+        );
+        const compatibleSources = affinityResult.candidates;
         const externalMkvSources = selectVlcFallbackCandidates(found);
+
+        const rememberedSource = isRememberedCandidate(compatibleSources[0], sourceMemory);
+        const rememberedOriginalIndex = rememberedSource
+          ? phoneCompatibleSources.findIndex(candidate => candidate.fingerprint === sourceMemory?.preferred?.fingerprint)
+          : -1;
+        if (rememberedSource) {
+          console.info(formatPlaybackDiagnostic(
+            rememberedOriginalIndex > 0 ? "remembered source moved to front" : "remembered source already ranked first",
+            {
+              previousPosition: rememberedOriginalIndex >= 0 ? rememberedOriginalIndex + 1 : "unknown",
+              ...getPlaybackSourceDiagnosticFields(compatibleSources[0], 0, compatibleSources.length)
+            }
+          ));
+        } else if (affinityResult.match && compatibleSources[0]?.id === affinityResult.candidates[0]?.id) {
+          console.info(formatPlaybackDiagnostic(
+            sourceAffinityOrigin === "show-history" ? "show-history source match chosen" : "next-episode source match chosen",
+            {
+              strategy: affinityResult.match.strategy,
+              previousPosition: affinityResult.match.fromIndex + 1,
+              ...getPlaybackSourceDiagnosticFields(compatibleSources[0], 0, compatibleSources.length)
+            }
+          ));
+        }
+        rememberedCandidateIdRef.current = rememberedSource ? compatibleSources[0]?.id || null : null;
 
         setCandidates(compatibleSources);
         playableCandidatesRef.current = compatibleSources;
@@ -1110,7 +1353,11 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           setSourceValidated(false);
           sourceValidatedRef.current = false;
           setIsLoading(true);
-          setStatusText(`Checking source 1 of ${compatibleSources.length}...`);
+          setStatusText(
+            rememberedSource
+              ? "Reconnecting to your previous source..."
+              : `Checking source 1 of ${compatibleSources.length}...`
+          );
         } else if (externalMkvSources.length > 0) {
           setMode('vlc_fallback');
           modeRef.current = 'vlc_fallback';
@@ -1139,7 +1386,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       active = false; 
       controller.abort();
     };
-  }, [request, resolutionAttempt, isIOS, resetSubtitleAssist]);
+  }, [request, resolutionAttempt, isIOS, resetPlaybackProof, resetSubtitleAssist]);
 
   const attemptPlayback = async () => {
     const video = videoRef.current;
@@ -1237,6 +1484,10 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
   const startNextEpisode = useCallback(() => {
     if (!nextRequest) return;
+    const nextSourceHint = createSourceAffinityHint(currentProvenCandidateRef.current);
+    pendingNextSourceAffinityRef.current = nextSourceHint
+      ? { episodeId: nextRequest.episodeId, hint: nextSourceHint }
+      : null;
     clearCurrentPlaybackProgress();
     sourceValidatedRef.current = false;
     if (!completionHandledRef.current) {
@@ -1271,6 +1522,14 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     playbackClock.duration,
     new Set(ignoredSegmentTypes)
   );
+  const autoSkipCountdown = autoSkipEnabled
+    && activeSkipSegment
+    && activeSkipSegment.type !== "outro"
+    && activeSkipSegment.endSeconds - (activeSkipSegment.startSeconds + AUTO_SKIP_DELAY_SECONDS) >= AUTO_SKIP_MINIMUM_REMAINDER_SECONDS
+    ? Math.max(0, Math.ceil(
+        activeSkipSegment.startSeconds + AUTO_SKIP_DELAY_SECONDS - playbackClock.current
+      ))
+    : null;
 
   const creditsWindowActive = sourceValidated
     && !episodeEnded
@@ -1375,6 +1634,62 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     video.currentTime = target;
     setPlaybackClock(current => ({ ...current, current: target, duration: video.duration }));
   }, [activeSkipSegment, nextRequest, startNextEpisode]);
+
+  useEffect(() => {
+    if (!activeSkipSegment || !shouldAutomaticallySkipSegment(
+      autoSkipEnabled,
+      playbackClock.playing,
+      activeSkipSegment.type,
+      playbackClock.current,
+      activeSkipSegment.startSeconds,
+      activeSkipSegment.endSeconds
+    )) return;
+
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    const skippedType = activeSkipSegment.type;
+    const target = Math.min(video.duration, activeSkipSegment.endSeconds + 0.25);
+    setIgnoredSegmentTypes(current => current.includes(skippedType) ? current : [...current, skippedType]);
+    video.currentTime = target;
+    setPlaybackClock(current => ({ ...current, current: target, duration: video.duration }));
+    setAutoSkipNotice(`${skippedType === "intro" ? "Intro" : "Recap"} skipped`);
+
+    if (autoSkipNoticeTimerRef.current !== null) window.clearTimeout(autoSkipNoticeTimerRef.current);
+    autoSkipNoticeTimerRef.current = window.setTimeout(() => {
+      setAutoSkipNotice(null);
+      autoSkipNoticeTimerRef.current = null;
+    }, 2_200);
+  }, [activeSkipSegment, autoSkipEnabled, playbackClock.current, playbackClock.playing]);
+
+  useEffect(() => () => {
+    if (autoSkipNoticeTimerRef.current !== null) window.clearTimeout(autoSkipNoticeTimerRef.current);
+  }, []);
+
+  // IntroDB remains primary. Once the real file duration is known, SkipDB can
+  // safely fill any missing intro, recap, or credits timestamp for that release.
+  useEffect(() => {
+    if (request.isMovie || !sourceValidated) return;
+    if (introDBLookupStatus !== "done" && introDBLookupStatus !== "failed") return;
+    const imdbId = resolvedImdbIdRef.current;
+    const durationSeconds = videoRef.current?.duration;
+    if (!imdbId || !Number.isFinite(durationSeconds) || !durationSeconds) return;
+    const lookupKey = `${imdbId.toLowerCase()}:${request.season}:${request.number}:${Math.round(durationSeconds)}`;
+    if (skipDBLookupKeyRef.current === lookupKey) return;
+    skipDBLookupKeyRef.current = lookupKey;
+
+    const primary = introDBSegments;
+    if (!needsSkipDBFallback(primary)) return;
+    let active = true;
+    void getSkipDBSegments(imdbId, request.season, request.number, durationSeconds)
+      .then(fallback => {
+        if (!active || skipDBLookupKeyRef.current !== lookupKey) return;
+        setIntroDBSegments(current => mergeSkipSegments(current, fallback).segments);
+      })
+      .catch(error => {
+        if (active) console.warn("SkipDB timestamps are unavailable for this episode", error);
+      });
+    return () => { active = false; };
+  }, [introDBLookupStatus, introDBSegments, request.isMovie, request.number, request.season, sourceValidated]);
 
   useEffect(() => {
     const shouldFocusSkip = creditsWindowActive || Boolean(activeSkipSegment && activeSkipSegment.type !== "outro");
@@ -1558,34 +1873,79 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     return () => window.removeEventListener("keydown", handleMediaKey);
   }, []);
 
-  // Give each direct stream time to expose metadata while it remains hidden.
+  // Skip silent links quickly while giving a source that is actually receiving
+  // media enough time to become playable on a mobile connection.
   useEffect(() => {
     if (mode !== 'playing' || !currentStream) return;
 
+    const currentCandidate = playableCandidatesRef.current[candidateIndexRef.current];
+    if (!currentCandidate || currentCandidate.url !== currentStream) return;
     candidateAdvanceLockRef.current = false;
     playAttemptedForSourceRef.current = false;
     sourceValidatedRef.current = false;
     resumeAppliedForSourceRef.current = false;
+    resetPlaybackProof(currentCandidate.id);
     setSourceValidated(false);
     setAutoplayBlocked(false);
     setIsLoading(true);
-    setStatusText(`Checking source ${candidateIndexRef.current + 1} of ${playableCandidatesRef.current.length}...`);
+    setStatusText(
+      currentCandidate.id === rememberedCandidateIdRef.current
+        ? "Reconnecting to your previous source..."
+        : `Checking source ${candidateIndexRef.current + 1} of ${playableCandidatesRef.current.length}...`
+    );
 
-    const timeoutDuration = candidateIndexRef.current === 0 ? 12_000 : 6_500;
-    const timeout = window.setTimeout(() => {
+    const video = videoRef.current;
+    const startedAt = Date.now();
+    const firstAttempt = candidateIndexRef.current === 0;
+    const initialBufferedEnd = getBufferedEndSeconds(video?.buffered);
+    let latestBufferedEnd = initialBufferedEnd;
+    let progressEventSeen = false;
+    let timeout: number | null = null;
+
+    const observeProgress = () => {
+      progressEventSeen = true;
+      latestBufferedEnd = Math.max(latestBufferedEnd, getBufferedEndSeconds(video?.buffered));
+    };
+
+    const finishProbe = () => {
       if (modeRef.current !== 'playing' || sourceValidatedRef.current) return;
 
-      const video = videoRef.current;
-      if (video) {
-        const validation = validateCurrentSource(video);
+      const activeVideo = videoRef.current;
+      if (activeVideo) {
+        latestBufferedEnd = Math.max(latestBufferedEnd, getBufferedEndSeconds(activeVideo.buffered));
+        const validation = validateCurrentSource(activeVideo);
         if (validation !== 'pending') return;
+        if (activeVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) progressEventSeen = true;
       }
 
-      handleNextCandidate();
-    }, timeoutDuration);
+      const elapsedMs = Date.now() - startedAt;
+      const meaningfulProgress = hasMeaningfulStartupProgress(
+        progressEventSeen,
+        initialBufferedEnd,
+        latestBufferedEnd
+      );
+      const attemptLimitMs = getStartupAttemptLimitMs(meaningfulProgress, PROGRESSING_STARTUP_TIMEOUT_MS, firstAttempt);
+      if (meaningfulProgress && elapsedMs < attemptLimitMs) {
+        setStatusText("Source is responding — preparing playback...");
+        timeout = window.setTimeout(finishProbe, attemptLimitMs - elapsedMs);
+        return;
+      }
 
-    return () => window.clearTimeout(timeout);
-  }, [currentStream, mode, handleNextCandidate, validateCurrentSource]);
+      recordCurrentSourceFailure("startup-timeout", elapsedMs);
+      handleNextCandidate();
+    };
+
+    video?.addEventListener('progress', observeProgress);
+    timeout = window.setTimeout(
+      finishProbe,
+      getStartupAttemptLimitMs(false, PROGRESSING_STARTUP_TIMEOUT_MS, firstAttempt)
+    );
+
+    return () => {
+      if (timeout !== null) window.clearTimeout(timeout);
+      video?.removeEventListener('progress', observeProgress);
+    };
+  }, [currentStream, mode, handleNextCandidate, recordCurrentSourceFailure, resetPlaybackProof, validateCurrentSource]);
 
   useEffect(() => {
     if (mode !== 'playing') return;
@@ -1593,6 +1953,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     if (!video) return;
 
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    let proofStallTimer: ReturnType<typeof setTimeout> | null = null;
 
     const handleWaiting = () => {
       if (video.paused || autoplayBlocked) return;
@@ -1606,6 +1967,14 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       }
 
       if (stallTimer) clearTimeout(stallTimer);
+      if (!playbackProofRef.current.saved && !proofStallTimer) {
+        proofStallTimer = setTimeout(() => {
+          proofStallTimer = null;
+          if (!video.paused && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+            playbackProofRef.current.baselineSeconds = null;
+          }
+        }, SOURCE_PROOF_STALL_RESET_MS);
+      }
       const stallDuration = candidateIndexRef.current === 0 ? 12_000 : 6_500;
       stallTimer = setTimeout(() => {
         if (
@@ -1613,6 +1982,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           !video.paused &&
           video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
         ) {
+          recordCurrentSourceFailure("media-error");
           handleNextCandidate();
         }
       }, stallDuration);
@@ -1639,6 +2009,11 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         playing: !video.paused
       });
       if (stallTimer) clearTimeout(stallTimer);
+      if (proofStallTimer) {
+        clearTimeout(proofStallTimer);
+        proofStallTimer = null;
+      }
+      confirmCurrentSourceIfProven(video);
     };
 
     const handleTimeUpdate = () => {
@@ -1666,6 +2041,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         setStatusText("Playing");
         if (stallTimer) clearTimeout(stallTimer);
         persistPlaybackProgress();
+        confirmCurrentSourceIfProven(video);
 
         const hasUsableIntroDBOutro = Boolean(
           introDBSegments.outro && introDBSegments.outro.startSeconds < video.duration
@@ -1777,11 +2153,23 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     const handleVideoError = () => {
       setIsMidstreamBuffering(false);
       if (modeRef.current === 'playing') {
+        recordCurrentSourceFailure("media-error");
         handleNextCandidate();
       }
     };
 
+    const handleSeeking = () => {
+      playbackProofRef.current.seeking = true;
+      playbackProofRef.current.baselineSeconds = null;
+      if (proofStallTimer) {
+        clearTimeout(proofStallTimer);
+        proofStallTimer = null;
+      }
+    };
+
     const handleSeeked = () => {
+      playbackProofRef.current.seeking = false;
+      playbackProofRef.current.baselineSeconds = video.currentTime;
       persistPlaybackProgress(true);
       setPlaybackClock({
         current: video.currentTime || 0,
@@ -1797,6 +2185,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     video.addEventListener('play', handlePlaying);
     video.addEventListener('pause', handlePause);
     video.addEventListener('timeupdate', handleTimeUpdate);
+    video.addEventListener('seeking', handleSeeking);
     video.addEventListener('seeked', handleSeeked);
     video.addEventListener('loadstart', handleLoadStart);
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
@@ -1809,12 +2198,14 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
     return () => {
       if (stallTimer) clearTimeout(stallTimer);
+      if (proofStallTimer) clearTimeout(proofStallTimer);
       video.removeEventListener('waiting', handleWaiting);
       video.removeEventListener('stalled', handleWaiting);
       video.removeEventListener('playing', handlePlaying);
       video.removeEventListener('play', handlePlaying);
       video.removeEventListener('pause', handlePause);
       video.removeEventListener('timeupdate', handleTimeUpdate);
+      video.removeEventListener('seeking', handleSeeking);
       video.removeEventListener('seeked', handleSeeked);
       video.removeEventListener('loadstart', handleLoadStart);
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
@@ -1825,7 +2216,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       video.removeEventListener('error', handleVideoError);
       video.textTracks?.removeEventListener('addtrack', syncDetectedEnglishSubtitleTrack);
     };
-  }, [activateSubtitleAssist, applySavedProgress, currentStream, mode, autoplayBlocked, enableSubtitleAssist, ensureEnglishAudio, handleNextCandidate, introDBSegments.outro, isIOS, loadOnlineCaptions, nextRequest, persistPlaybackProgress, showControlsTemporarily, validateCurrentSource]);
+  }, [activateSubtitleAssist, applySavedProgress, confirmCurrentSourceIfProven, currentStream, mode, autoplayBlocked, enableSubtitleAssist, ensureEnglishAudio, handleNextCandidate, introDBSegments.outro, isIOS, loadOnlineCaptions, nextRequest, persistPlaybackProgress, recordCurrentSourceFailure, showControlsTemporarily, validateCurrentSource]);
 
   useEffect(() => {
     const handlePointerMove = (event: MouseEvent) => {
@@ -2098,12 +2489,25 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           >
             <div>
               <p className="text-orange-400 text-xs font-extrabold uppercase tracking-wider mb-1">
-                {activeSkipSegment.type} detected
+                {autoSkipCountdown !== null && autoSkipCountdown > 0
+                  ? `Auto-skip in ${autoSkipCountdown}s`
+                  : `${activeSkipSegment.type} detected`}
               </p>
-              <p className="text-lg sm:text-xl font-bold">Skip {activeSkipSegment.type}</p>
+              <p className="text-lg sm:text-xl font-bold">
+                Skip {activeSkipSegment.type}{autoSkipCountdown !== null && autoSkipCountdown > 0 ? " now" : ""}
+              </p>
             </div>
             <SkipForward className="w-9 h-9 text-orange-400 shrink-0" />
           </button>
+        </div>
+      )}
+
+      {mode === 'playing' && autoSkipNotice && (
+        <div className="absolute top-[calc(4.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[114] pointer-events-none" role="status" aria-live="polite">
+          <div className="px-5 py-2.5 rounded-full bg-slate-950/95 border border-emerald-400/70 text-white text-sm font-bold shadow-2xl flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-400" />
+            {autoSkipNotice}
+          </div>
         </div>
       )}
 
