@@ -1079,6 +1079,49 @@
     overscroll-behavior-y: none;
   }
 
+  /* On the phone, the fan deck is the entire Next Up queue. Keep that screen
+     inside the visible area between the compact header and fixed bottom dock;
+     the duplicate thumbnail rail is desktop-only. */
+  .nextup-cinema.tv-up-next-shell {
+    display: flex;
+    height: 100dvh;
+    min-height: 100dvh;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: calc(4.75rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  .nextup-cinema.tv-up-next-shell > [data-tv-app-header] {
+    flex: 0 0 auto;
+    padding-top: calc(0.65rem + env(safe-area-inset-top)) !important;
+    padding-bottom: 0.65rem !important;
+  }
+
+  .nextup-cinema.tv-up-next-shell > [data-tv-main] {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    padding-top: 0.7rem !important;
+    padding-bottom: 0.45rem !important;
+  }
+
+  .nextup-cinema.tv-up-next-shell > [data-tv-main] > div,
+  .nextup-cinema.tv-up-next-shell [data-tv-up-next-screen],
+  .nextup-cinema.tv-up-next-shell [data-tv-up-next-stage] {
+    width: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  .nextup-cinema.tv-up-next-shell > [data-tv-main] > div {
+    display: flex;
+  }
+
+  .nextup-cinema.tv-up-next-shell [data-tv-up-next-screen] {
+    overflow: hidden;
+  }
+
   [data-tv-hero-title] {
     position: relative;
     --hero-logo-max-w: min(100%, 22rem);
@@ -1326,7 +1369,9 @@
 
   [data-phone-up-next-stack] {
     isolation: isolate;
-    min-height: clamp(24rem, 57dvh, 32rem) !important;
+    height: 100%;
+    min-height: 0 !important;
+    flex: 1 1 auto;
   }
 
   [data-phone-up-next-stack] > [data-tv-up-next-hero-content] {

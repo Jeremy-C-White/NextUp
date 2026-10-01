@@ -443,11 +443,6 @@ export function UpNextTab({
             Play theme
           </button>
         )}
-        {themeStatus === "playing" && (
-          <span className="ml-auto inline-flex items-center justify-center rounded-full border border-orange-400/25 bg-black/45 p-2 text-orange-200" aria-label="Theme playing">
-            <Music2 className="h-4 w-4" />
-          </span>
-        )}
       </div>
 
       {items.length === 0 && isReady ? (
@@ -592,7 +587,7 @@ export function UpNextTab({
             )}
 
             {railItems.length > 0 && (
-              <div className="flex flex-1 min-w-0 flex-col gap-2 sm:gap-3">
+              <div className="hidden flex-1 min-w-0 flex-col gap-2 sm:gap-3 md:flex">
                 <div className="flex items-center justify-between px-1">
                   <div>
                     <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">More from your queue</h3>
