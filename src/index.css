@@ -1079,9 +1079,8 @@
     overscroll-behavior-y: none;
   }
 
-  /* On the phone, the fan deck is the entire Next Up queue. Keep that screen
-     inside the visible area between the compact header and fixed bottom dock;
-     the duplicate thumbnail rail is desktop-only. */
+  /* Keep the hero and its compact queue filmstrip inside the visible area
+     between the phone header and the fixed bottom dock. */
   .nextup-cinema.tv-up-next-shell {
     display: flex;
     height: 100dvh;
@@ -1120,6 +1119,10 @@
 
   .nextup-cinema.tv-up-next-shell [data-tv-up-next-screen] {
     overflow: hidden;
+  }
+
+  .nextup-cinema.tv-up-next-shell [data-tv-up-next-stage] {
+    gap: 0.45rem !important;
   }
 
   [data-tv-hero-title] {
@@ -1374,7 +1377,10 @@
   [data-phone-up-next-stack] {
     isolation: isolate;
     height: 100%;
+    width: 100%;
+    max-width: 100%;
     min-height: 0 !important;
+    min-width: 0;
     flex: 1 1 auto;
   }
 
@@ -1387,10 +1393,10 @@
   }
 
   [data-phone-up-next-fan-card] {
-    top: 1.2rem;
-    right: 0.25rem;
-    bottom: 0.55rem;
-    left: 0.25rem;
+    top: 0.45rem;
+    right: 0.9rem;
+    bottom: 0.45rem;
+    left: 0.9rem;
     pointer-events: none;
     will-change: transform;
     backface-visibility: hidden;
@@ -1399,6 +1405,47 @@
     border-color: rgb(255 255 255 / 16%);
     box-shadow: 0 18px 42px rgb(0 0 0 / 48%), 0 0 10px rgb(249 115 22 / 3%);
     filter: saturate(0.94) brightness(0.94);
+  }
+
+  [data-phone-up-next-stack] [data-tv-up-next-hero-copy],
+  [data-phone-up-next-fan-copy] {
+    padding: clamp(0.9rem, 2.4dvh, 1.25rem) !important;
+  }
+
+  [data-phone-up-next-stack] [data-tv-hero-title] {
+    --hero-logo-max-h: clamp(4rem, 10dvh, 6.25rem);
+  }
+
+  [data-phone-up-next-strip] {
+    flex: 0 0 3.4rem;
+    width: 100%;
+    min-width: 0;
+    padding: 0 0.9rem;
+  }
+
+  [data-phone-up-next-strip-track] {
+    height: 100%;
+    gap: 0.4rem;
+    padding: 0.15rem 0.1rem 0.25rem;
+    scroll-padding-inline: 0.1rem;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  [data-phone-up-next-strip-track] > button {
+    flex: 0 0 clamp(3.75rem, 18vw, 4.5rem);
+    height: 3rem;
+    border-color: rgb(255 255 255 / 16%);
+    opacity: 0.68;
+    box-shadow: 0 5px 14px rgb(0 0 0 / 28%);
+    transition: opacity 180ms ease, border-color 180ms ease, transform 180ms ease;
+  }
+
+  [data-phone-up-next-strip-track] > button[aria-current="true"] {
+    border-color: #fb923c;
+    opacity: 1;
+    box-shadow: 0 0 0 1px rgb(251 146 60 / 38%), 0 7px 18px rgb(0 0 0 / 36%);
+    transform: translateY(-1px);
   }
 
   [data-phone-up-next-fan-card][data-phone-up-next-fan-revealed="true"] {

@@ -55,10 +55,10 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
       className="absolute overflow-hidden rounded-3xl border border-white/25 bg-[#050811] shadow-2xl md:hidden"
       style={{
         zIndex: isRevealed ? 2 : 1,
-        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 - 3.2 * revealProgress}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg) scale(${0.97 + 0.025 * revealProgress})`,
+        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 * (1 - revealProgress)}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg) scale(${0.97 + 0.03 * revealProgress})`,
         transition: isDragging
-          ? "border-color 180ms ease, box-shadow 220ms ease, filter 180ms ease"
-          : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), border-color 220ms ease, box-shadow 280ms ease, filter 220ms ease"
+          ? "border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
+          : "transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
       }}
     >
       {artworkUrl ? (
@@ -90,14 +90,14 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
           headingClassName="text-3xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
         />
         <p className="text-lg font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">{episodeLabel}</p>
-        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300 mb-4">
+        <div data-phone-fan-reserved="true" className="flex flex-wrap items-center gap-2 text-sm text-slate-300 mb-4 opacity-0">
           {releaseTime && <span>{formatUpNextAirDate(releaseTime)}</span>}
           {(item.nextEp.runtime || item.show.runtime) && <span>{item.nextEp.runtime || item.show.runtime} min</span>}
           {item.backlog.unwatchedCount > 1 && item.backlog.remainingMinutes > 0 && (
             <span>{formatCatchUpDuration(item.backlog.remainingMinutes)} to catch up</span>
           )}
         </div>
-        <div className="flex items-center">
+        <div data-phone-fan-reserved="true" className="flex items-center opacity-0">
           <span className="inline-flex w-full max-w-full min-h-[52px] px-5 py-3.5 bg-orange-500 text-orange-950 text-lg font-extrabold rounded-2xl items-center justify-center gap-3 whitespace-nowrap">
             <PlayCircle className="w-7 h-7" />
             {resumePosition !== null ? `Resume ${formatPlaybackPosition(resumePosition)}` : "Play"}
@@ -128,6 +128,7 @@ export function UpNextTab({
   const blockHeroClickRef = useRef(false);
   const swipeCommitTimerRef = useRef<number | null>(null);
   const thumbnailRailRef = useRef<HTMLDivElement>(null);
+  const phoneStripRef = useRef<HTMLDivElement>(null);
   const carouselWheelStateRef = useRef(createCarouselWheelState());
   const carouselStageCleanupRef = useRef<(() => void) | null>(null);
   const heroArtworkPreloadsRef = useRef(new Map<string, HTMLImageElement>());
@@ -198,6 +199,12 @@ export function UpNextTab({
 
   useEffect(() => {
     thumbnailRailRef.current?.scrollTo({ left: 0, behavior: "auto" });
+    const strip = phoneStripRef.current;
+    const activeThumbnail = strip?.querySelector<HTMLElement>(`[data-phone-strip-index="${safeActiveIndex}"]`);
+    if (strip && activeThumbnail) {
+      const centeredLeft = activeThumbnail.offsetLeft - (strip.clientWidth - activeThumbnail.offsetWidth) / 2;
+      strip.scrollTo({ left: Math.max(0, centeredLeft), behavior: "smooth" });
+    }
   }, [safeActiveIndex]);
 
   useEffect(() => {
@@ -602,6 +609,55 @@ export function UpNextTab({
                 <span aria-hidden="true" className="text-base text-orange-400">‹</span>
                 <span>Flick left or right</span>
                 <span aria-hidden="true" className="text-base text-orange-400">›</span>
+              </div>
+            )}
+
+            {items.length > 1 && (
+              <div data-phone-up-next-strip="true" className="md:hidden">
+                <div
+                  ref={phoneStripRef}
+                  data-phone-up-next-strip-track="true"
+                  className="flex overflow-x-auto scrollbar-none"
+                  aria-label="Next Up queue"
+                >
+                  {items.map((item, index) => {
+                    const isActive = index === safeActiveIndex;
+                    const thumbnailEpisodeLabel = item.show.isMovie
+                      ? "Movie"
+                      : `S${item.nextEp.season} E${item.nextEp.number}`;
+                    const thumbnailArtwork = optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl);
+                    return (
+                      <button
+                        key={`phone-strip:${item.show.id}:${item.nextEp.id}`}
+                        type="button"
+                        data-phone-strip-index={index}
+                        aria-current={isActive ? "true" : undefined}
+                        aria-label={`${isActive ? "Currently selected" : "Show"} ${item.show.name}, ${thumbnailEpisodeLabel}`}
+                        onClick={() => activateFromThumbnail(index)}
+                        className="relative shrink-0 overflow-hidden rounded-xl border bg-slate-950 text-left"
+                      >
+                        {thumbnailArtwork ? (
+                          <img
+                            decoding="async"
+                            referrerPolicy="no-referrer"
+                            loading="lazy"
+                            src={thumbnailArtwork}
+                            alt=""
+                            className="absolute inset-0 h-full w-full object-cover"
+                          />
+                        ) : (
+                          <span className="absolute inset-0 flex items-center justify-center text-lg font-bold text-slate-500">
+                            {item.show.name?.[0] || "?"}
+                          </span>
+                        )}
+                        <span className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/15 to-transparent" />
+                        <span className="absolute inset-x-1.5 bottom-1 truncate text-[9px] font-extrabold tracking-wide text-white">
+                          {thumbnailEpisodeLabel}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
