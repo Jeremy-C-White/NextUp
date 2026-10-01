@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, lazy, Suspense, useMemo, useRef } from "react";
-import type { ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { LibraryTab } from "./components/LibraryTab";
 import { UpNextTab } from "./components/UpNextTab";
@@ -1655,6 +1655,13 @@ const loadWithFallback = async (
       : activeTab === "coming"
         ? "[data-tv-focus-key^='recently-aired:'], [data-tv-focus-key^='coming:']"
         : "[data-tv-focus-key^='library:'], [data-tv-section='library-controls'] button";
+  const bottomNavActiveIndex = activeTab === "up-next"
+    ? 0
+    : activeTab === "discover"
+      ? 1
+      : activeTab === "coming"
+        ? 3
+        : 4;
 
   if (loading) {
     return (
@@ -2072,7 +2079,12 @@ const loadWithFallback = async (
 
       {/* Bottom Nav */}
       <div data-tv-bottom-nav-shell="true" className="fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 pb-[env(safe-area-inset-bottom)] z-40">
-        <div data-tv-bottom-nav="true" className="flex justify-around items-center px-2 py-2 max-w-md mx-auto">
+        <div
+          data-tv-bottom-nav="true"
+          className="flex justify-around items-center px-2 py-2 max-w-md mx-auto"
+          style={{ "--phone-nav-index": bottomNavActiveIndex } as CSSProperties}
+        >
+          <span data-phone-nav-indicator="true" className="md:hidden" aria-hidden="true" />
           {[
             { id: "up-next", label: "Next Up", icon: PlayCircle },
             { id: "discover", label: "Discover", icon: Compass },

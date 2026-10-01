@@ -7,7 +7,7 @@ import { optimizeArtworkUrl } from "../lib/images";
 import { formatPlaybackPosition } from "../lib/playbackProgress";
 import { formatUpNextAirDate, SmartUpNextItem } from "../lib/upNext";
 import { formatCatchUpDuration } from "../lib/episodeBacklog";
-import { consumeCarouselWheel, createCarouselWheelState, getCarouselSwipeDirection } from "../lib/carouselWheel";
+import { consumeCarouselWheel, createCarouselWheelState, getCarouselPreviewIndex, getCarouselSwipeDirection } from "../lib/carouselWheel";
 import { getAdjacentCarouselIndexes } from "../lib/carouselPreload";
 import { HeroTitle, useTitleLogo } from "./HeroTitle";
 import { prefetchTitleLogos } from "../lib/titleLogos";
@@ -30,9 +30,10 @@ interface PhoneUpNextFanCardProps {
   index: number;
   side: "previous" | "next";
   dragOffset: number;
+  isDragging: boolean;
 }
 
-function PhoneUpNextFanCard({ item, index, side, dragOffset }: PhoneUpNextFanCardProps) {
+function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging }: PhoneUpNextFanCardProps) {
   const logo = useTitleLogo(item.show);
   const artworkUrl = optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl);
   const isRevealed = side === "previous" ? dragOffset > 0 : dragOffset < 0;
@@ -51,7 +52,10 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset }: PhoneUpNextFanCar
       className="absolute overflow-hidden rounded-3xl border border-white/25 bg-[#050811] shadow-2xl md:hidden"
       style={{
         zIndex: isRevealed ? 2 : 1,
-        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 - 3.2 * revealProgress}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg) scale(${0.97 + 0.025 * revealProgress})`
+        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 - 3.2 * revealProgress}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg) scale(${0.97 + 0.025 * revealProgress})`,
+        transition: isDragging
+          ? "border-color 180ms ease, box-shadow 220ms ease, filter 180ms ease"
+          : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), border-color 220ms ease, box-shadow 280ms ease, filter 220ms ease"
       }}
     >
       {artworkUrl ? (
@@ -115,6 +119,8 @@ export function UpNextTab({
   const safeActiveIndex = items.length > 0 ? Math.min(activeIndex, items.length - 1) : 0;
   const activeItem = items[safeActiveIndex];
   const activeTitleLogo = useTitleLogo(activeItem?.show);
+  const heroRevealProgress = Math.min(1, Math.abs(heroDragOffset) / 240);
+  const ambientPreviewIndex = getCarouselPreviewIndex(safeActiveIndex, items.length, heroDragOffset);
   const queueSummary = useMemo(() => {
     const episodes = items.reduce((total, item) => total + item.backlog.unwatchedCount, 0);
     return `${items.length} ${items.length === 1 ? "show" : "shows"} \u00b7 ${episodes} unwatched ${episodes === 1 ? "episode" : "episodes"}`;
@@ -205,14 +211,16 @@ export function UpNextTab({
   }, []);
 
   useEffect(() => {
-    if (!activeItem) {
+    const ambientItem = items[ambientPreviewIndex];
+    if (!ambientItem) {
       setAmbientArtwork(null);
       return;
     }
-    const artwork = optimizeArtworkUrl(activeItem.show.backdropUrl || activeItem.show.imageUrl);
-    const timer = window.setTimeout(() => setAmbientArtwork(artwork || null), 240);
+    const artwork = optimizeArtworkUrl(ambientItem.show.backdropUrl || ambientItem.show.imageUrl);
+    const isSwipePreview = ambientPreviewIndex !== safeActiveIndex;
+    const timer = window.setTimeout(() => setAmbientArtwork(artwork || null), isSwipePreview ? 0 : 180);
     return () => window.clearTimeout(timer);
-  }, [activeItem?.show.id, activeItem?.show.backdropUrl, activeItem?.show.imageUrl]);
+  }, [ambientPreviewIndex, safeActiveIndex, items[ambientPreviewIndex]?.show.id, items[ambientPreviewIndex]?.show.backdropUrl, items[ambientPreviewIndex]?.show.imageUrl]);
 
   const logoPrefetchKey = items.map(item => item.show.id).join("|");
   useEffect(() => {
@@ -486,6 +494,7 @@ export function UpNextTab({
                   index={index}
                   side={side}
                   dragOffset={heroDragOffset}
+                  isDragging={heroIsDragging}
                 />
               ))}
 
@@ -515,7 +524,7 @@ export function UpNextTab({
                 data-phone-hero-swipe={heroTransitionDirection === 1 ? "next" : heroTransitionDirection === -1 ? "previous" : undefined}
                 className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging ? "transition-none" : "transition-transform duration-200 ease-out"}`}
                 style={heroDragOffset !== 0 ? {
-                  transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg) scale(0.99)`
+                  transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg) scale(${0.995 - heroRevealProgress * 0.008})`
                 } : undefined}
                 onAnimationEnd={() => setHeroTransitionDirection(0)}
               >
@@ -541,20 +550,22 @@ export function UpNextTab({
                   </span>
                 )}
                 <div data-tv-up-next-hero-copy="true" className="relative z-10 h-full p-5 sm:p-7 md:p-9 flex flex-col justify-end max-w-full sm:max-w-[88%] pointer-events-none">
-                  <div className="flex flex-wrap items-center gap-3 mb-3">
+                  <div data-phone-card-settle="eyebrow" className="flex flex-wrap items-center gap-3 mb-3">
                     <span data-tv-hero-eyebrow="true" className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">{queueReason}</span>
                   </div>
 
-                  <HeroTitle
-                    name={show.name}
-                    logo={activeTitleLogo}
-                    headingClassName="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
-                  />
-                  <p className="text-lg md:text-xl font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">
+                  <div data-phone-card-settle="title">
+                    <HeroTitle
+                      name={show.name}
+                      logo={activeTitleLogo}
+                      headingClassName="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
+                    />
+                  </div>
+                  <p data-phone-card-settle="episode" className="text-lg md:text-xl font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">
                     {episodeLabel}
                   </p>
 
-                  <div data-tv-hero-meta="true" className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm sm:text-base text-slate-300 mb-4">
+                  <div data-tv-hero-meta="true" data-phone-card-settle="meta" className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm sm:text-base text-slate-300 mb-4">
                     {releaseTime && <span>{formatUpNextAirDate(releaseTime)}</span>}
                     {(nextEp.runtime || show.runtime) && <span>{nextEp.runtime || show.runtime} min</span>}
                     {backlog.unwatchedCount > 1 && backlog.remainingMinutes > 0 && (
@@ -562,7 +573,7 @@ export function UpNextTab({
                     )}
                   </div>
 
-                  <div className="flex items-center">
+                  <div data-phone-card-settle="action" className="flex items-center">
                     <span data-tv-hero-action="true" className="inline-flex w-full sm:w-fit max-w-full min-h-[52px] sm:min-w-[170px] px-5 md:px-7 py-3.5 bg-orange-500 text-orange-950 text-lg font-extrabold rounded-2xl items-center justify-center gap-3 whitespace-nowrap">
                       <PlayCircle className="w-7 h-7" />
                       {resumePosition !== null ? `Resume ${formatPlaybackPosition(resumePosition)}` : "Play"}

@@ -15,6 +15,22 @@ export const createCarouselWheelState = (): CarouselWheelState => ({
   lockedUntil: 0
 });
 
+/** The card currently being revealed by a phone drag, before the swipe lands. */
+export function getCarouselPreviewIndex(
+  activeIndex: number,
+  itemCount: number,
+  dragOffset: number,
+  revealThreshold = 20
+): number {
+  if (!Number.isInteger(itemCount) || itemCount <= 0) return 0;
+  const normalizedActiveIndex = ((Math.trunc(activeIndex) % itemCount) + itemCount) % itemCount;
+  if (itemCount <= 1 || !Number.isFinite(dragOffset) || Math.abs(dragOffset) < revealThreshold) {
+    return normalizedActiveIndex;
+  }
+  const direction = dragOffset < 0 ? 1 : -1;
+  return (normalizedActiveIndex + direction + itemCount) % itemCount;
+}
+
 export function getCarouselSwipeDirection(
   deltaX: number,
   deltaY: number,

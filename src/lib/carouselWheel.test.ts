@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { consumeCarouselWheel, createCarouselWheelState, getCarouselSwipeDirection } from "./carouselWheel";
+import { consumeCarouselWheel, createCarouselWheelState, getCarouselPreviewIndex, getCarouselSwipeDirection } from "./carouselWheel";
+
+describe("getCarouselPreviewIndex", () => {
+  it("previews the next card while dragging left and the previous card while dragging right", () => {
+    expect(getCarouselPreviewIndex(2, 5, -40)).toBe(3);
+    expect(getCarouselPreviewIndex(2, 5, 40)).toBe(1);
+  });
+
+  it("wraps at both ends of the deck", () => {
+    expect(getCarouselPreviewIndex(4, 5, -40)).toBe(0);
+    expect(getCarouselPreviewIndex(0, 5, 40)).toBe(4);
+  });
+
+  it("keeps the active artwork for taps and tiny movements", () => {
+    expect(getCarouselPreviewIndex(2, 5, 12)).toBe(2);
+    expect(getCarouselPreviewIndex(0, 0, -40)).toBe(0);
+  });
+});
 
 describe("getCarouselSwipeDirection", () => {
   it("moves with deliberate horizontal phone swipes", () => {

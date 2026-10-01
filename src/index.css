@@ -1179,10 +1179,56 @@
     padding-right: env(safe-area-inset-right);
     padding-left: env(safe-area-inset-left);
     box-shadow: 0 -12px 36px rgb(2 6 23 / 10%);
+    -webkit-backdrop-filter: blur(20px) saturate(1.35);
+    backdrop-filter: blur(20px) saturate(1.35);
+  }
+
+  [data-tv-bottom-nav-shell]::before {
+    position: absolute;
+    top: 0;
+    right: 8%;
+    left: 8%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 28%), transparent);
+    content: "";
+    pointer-events: none;
+  }
+
+  [data-tv-bottom-nav] {
+    position: relative;
+    isolation: isolate;
+  }
+
+  [data-phone-nav-indicator] {
+    position: absolute;
+    z-index: 0;
+    top: 0.45rem;
+    bottom: 0.45rem;
+    left: calc((100% / 5) * var(--phone-nav-index) + 0.3rem);
+    width: calc((100% / 5) - 0.6rem);
+    border: 1px solid rgb(251 146 60 / 18%);
+    border-radius: 0.9rem;
+    background: linear-gradient(180deg, rgb(249 115 22 / 17%), rgb(249 115 22 / 8%));
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 9%), 0 6px 18px rgb(249 115 22 / 8%);
+    transition: left 360ms cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
   }
 
   [data-tv-bottom-nav] button[aria-current="page"] {
-    background: rgb(249 115 22 / 12%);
+    background: transparent;
+  }
+
+  [data-tv-bottom-nav] button {
+    z-index: 1;
+  }
+
+  [data-tv-bottom-nav] button svg {
+    transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), filter 260ms ease;
+  }
+
+  [data-tv-bottom-nav] button[aria-current="page"] svg {
+    transform: translate3d(0, -1px, 0) scale(1.08);
+    filter: drop-shadow(0 3px 8px rgb(249 115 22 / 35%));
   }
 
   [data-tv-bottom-nav] button[aria-current="page"]::after {
@@ -1280,10 +1326,15 @@
 
   [data-phone-up-next-stack] {
     isolation: isolate;
+    min-height: clamp(24rem, 57dvh, 32rem) !important;
   }
 
   [data-phone-up-next-stack] > [data-tv-up-next-hero-content] {
     inset: 0.45rem 0.9rem 0.45rem;
+    box-shadow:
+      0 26px 64px rgb(0 0 0 / 46%),
+      0 0 0 1px rgb(255 255 255 / 8%),
+      0 0 28px rgb(249 115 22 / 6%);
   }
 
   [data-phone-up-next-fan-card] {
@@ -1296,6 +1347,20 @@
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
     transform-style: preserve-3d;
+    border-color: rgb(255 255 255 / 16%);
+    box-shadow: 0 18px 42px rgb(0 0 0 / 48%), 0 0 10px rgb(249 115 22 / 3%);
+    filter: saturate(0.94) brightness(0.94);
+  }
+
+  [data-phone-up-next-fan-card][data-phone-up-next-fan-revealed="true"] {
+    border-color: rgb(255 255 255 / 32%);
+    box-shadow: 0 28px 64px rgb(0 0 0 / 60%), 0 0 28px rgb(249 115 22 / 10%);
+    filter: saturate(1.02) brightness(1);
+  }
+
+  [data-phone-up-next-fan-card] img,
+  [data-phone-up-next-stack] > [data-tv-up-next-hero-content] > img {
+    transform: translateZ(0) scale(1.002);
   }
 
   [data-phone-up-next-fan-card="previous"] {
@@ -1318,6 +1383,29 @@
 
   [data-phone-hero-swipe="previous"] {
     animation: phone-hero-enter-previous 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  [data-phone-hero-swipe] [data-phone-card-settle] {
+    animation: phone-card-content-settle 330ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  [data-phone-hero-swipe] [data-phone-card-settle="title"] { animation-delay: 24ms; }
+  [data-phone-hero-swipe] [data-phone-card-settle="episode"] { animation-delay: 42ms; }
+  [data-phone-hero-swipe] [data-phone-card-settle="meta"] { animation-delay: 60ms; }
+  [data-phone-hero-swipe] [data-phone-card-settle="action"] { animation-delay: 78ms; }
+
+  .nextup-cinema [data-tv-ambient] canvas {
+    transition-duration: 520ms;
+  }
+
+  .nextup-cinema [data-tv-ambient] canvas[data-ambient-visible="true"] {
+    opacity: 0.38;
+  }
+
+  .nextup-cinema [data-tv-ambient-shade] {
+    background:
+      linear-gradient(180deg, rgb(2 6 23 / 78%) 0%, rgb(2 6 23 / 24%) 40%, rgb(2 6 23 / 84%) 100%),
+      radial-gradient(ellipse at 50% 34%, transparent 0%, rgb(2 6 23 / 42%) 68%, rgb(2 6 23 / 78%) 100%);
   }
 
   [data-phone-player] video::cue {
@@ -1425,9 +1513,24 @@
   to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 
+@keyframes phone-card-content-settle {
+  from { opacity: 1; transform: translate3d(0, 8px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-phone-hero-swipe] {
     animation: none !important;
+  }
+
+  [data-phone-hero-swipe] [data-phone-card-settle],
+  [data-phone-up-next-fan-card],
+  [data-phone-up-next-stack] > [data-tv-up-next-hero-content],
+  [data-phone-nav-indicator],
+  [data-tv-bottom-nav] button svg,
+  .nextup-cinema [data-tv-ambient] canvas {
+    animation: none !important;
+    transition: none !important;
   }
 }
 
