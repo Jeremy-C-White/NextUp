@@ -37,9 +37,10 @@ export function UpNextTab({
   const themePlayerRef = useRef<TvThemePlayerHandle>(null);
   const warmTimerRef = useRef<number | null>(null);
   const heroPlayButtonRef = useRef<HTMLButtonElement>(null);
-  const heroTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const heroTouchStartRef = useRef<{ x: number; y: number; lastX: number; lastY: number; startedAt: number } | null>(null);
   const heroDragOffsetRef = useRef(0);
   const blockHeroClickRef = useRef(false);
+  const swipeCommitTimerRef = useRef<number | null>(null);
   const thumbnailRailRef = useRef<HTMLDivElement>(null);
   const carouselWheelStateRef = useRef(createCarouselWheelState());
   const carouselStageCleanupRef = useRef<(() => void) | null>(null);
@@ -59,6 +60,19 @@ export function UpNextTab({
     return Array.from({ length: items.length - 1 }, (_, offset) => {
       const index = (safeActiveIndex + offset + 1) % items.length;
       return { item: items[index], index };
+    });
+  }, [items, safeActiveIndex]);
+
+  const fanItems = useMemo(() => {
+    if (items.length <= 1) return [];
+    const offsets = items.length === 2 ? [1] : [-1, 1];
+    return offsets.map(offset => {
+      const index = (safeActiveIndex + offset + items.length) % items.length;
+      return {
+        item: items[index],
+        index,
+        side: offset < 0 ? "previous" as const : "next" as const
+      };
     });
   }, [items, safeActiveIndex]);
 
@@ -121,6 +135,7 @@ export function UpNextTab({
 
   useEffect(() => () => {
     heroArtworkPreloadsRef.current.clear();
+    if (swipeCommitTimerRef.current !== null) window.clearTimeout(swipeCommitTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -188,7 +203,17 @@ export function UpNextTab({
   const handleHeroTouchStart = (event: ReactTouchEvent<HTMLButtonElement>) => {
     const touch = event.touches[0];
     if (!touch || items.length <= 1) return;
-    heroTouchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    if (swipeCommitTimerRef.current !== null) {
+      window.clearTimeout(swipeCommitTimerRef.current);
+      swipeCommitTimerRef.current = null;
+    }
+    heroTouchStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      lastX: touch.clientX,
+      lastY: touch.clientY,
+      startedAt: event.timeStamp
+    };
     heroDragOffsetRef.current = 0;
     blockHeroClickRef.current = false;
     setHeroIsDragging(true);
@@ -202,7 +227,16 @@ export function UpNextTab({
     if (!start || !touch) return;
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
-    if (Math.abs(deltaX) <= Math.abs(deltaY) || Math.abs(deltaX) < 6) return;
+    start.lastX = touch.clientX;
+    start.lastY = touch.clientY;
+    if (Math.abs(deltaX) <= Math.abs(deltaY)) {
+      if (heroDragOffsetRef.current !== 0) {
+        heroDragOffsetRef.current = 0;
+        setHeroDragOffset(0);
+      }
+      return;
+    }
+    if (Math.abs(deltaX) < 6) return;
 
     if (event.cancelable) event.preventDefault();
     const maximumDrag = Math.max(72, window.innerWidth * 0.28);
@@ -211,20 +245,55 @@ export function UpNextTab({
     setHeroDragOffset(offset);
   };
 
-  const finishHeroTouch = () => {
-    const offset = heroDragOffsetRef.current;
+  const finishHeroTouch = (event: ReactTouchEvent<HTMLButtonElement>) => {
+    const start = heroTouchStartRef.current;
+    if (!start) return;
+    const endTouch = event.changedTouches[0];
+    const deltaX = (endTouch?.clientX ?? start.lastX) - start.x;
+    const deltaY = (endTouch?.clientY ?? start.lastY) - start.y;
+    const elapsedMs = Math.max(1, event.timeStamp - start.startedAt);
+    heroTouchStartRef.current = null;
+
+    const direction = getCarouselSwipeDirection(deltaX, deltaY, 48, elapsedMs);
+    if (direction === null) {
+      heroDragOffsetRef.current = 0;
+      setHeroIsDragging(false);
+      setHeroDragOffset(0);
+      return;
+    }
+
+    blockHeroClickRef.current = true;
+    setHeroIsDragging(false);
+    const reducedMotion = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      heroDragOffsetRef.current = 0;
+      setHeroDragOffset(0);
+      stepCarousel(direction);
+      window.setTimeout(() => {
+        blockHeroClickRef.current = false;
+      }, 0);
+      return;
+    }
+    const exitOffset = (direction === 1 ? -1 : 1) * Math.max(280, window.innerWidth * 0.78);
+    heroDragOffsetRef.current = exitOffset;
+    setHeroDragOffset(exitOffset);
+    swipeCommitTimerRef.current = window.setTimeout(() => {
+      swipeCommitTimerRef.current = null;
+      heroDragOffsetRef.current = 0;
+      setHeroDragOffset(0);
+      stepCarousel(direction);
+      window.setTimeout(() => {
+        blockHeroClickRef.current = false;
+      }, 350);
+    }, 180);
+  };
+
+  const cancelHeroTouch = () => {
     heroTouchStartRef.current = null;
     heroDragOffsetRef.current = 0;
     setHeroIsDragging(false);
     setHeroDragOffset(0);
-
-    const direction = getCarouselSwipeDirection(offset, 0);
-    if (direction === null) return;
-    blockHeroClickRef.current = true;
-    stepCarousel(direction);
-    window.setTimeout(() => {
-      blockHeroClickRef.current = false;
-    }, 450);
   };
 
   const handleHeroPlay = () => {
@@ -313,8 +382,34 @@ export function UpNextTab({
             <article
               data-tv-card="true"
               data-tv-up-next-hero="true"
-              className="relative shrink-0 w-full md:w-[46%] min-h-[410px] sm:min-h-[420px] rounded-3xl md:rounded-[2rem] overflow-hidden bg-slate-950 border border-slate-700 shadow-xl"
+              data-phone-up-next-stack="true"
+              className="relative shrink-0 w-full md:w-[46%] min-h-[410px] sm:min-h-[420px] rounded-3xl md:rounded-[2rem] overflow-visible md:overflow-hidden bg-transparent md:bg-slate-950 border border-transparent md:border-slate-700 shadow-none md:shadow-xl"
             >
+              {fanItems.map(({ item, index, side }) => (
+                <div
+                  key={`fan:${side}:${item.show.id}:${item.nextEp.id}`}
+                  data-phone-up-next-fan-card={side}
+                  data-phone-up-next-fan-index={index}
+                  aria-hidden="true"
+                  className="absolute z-0 overflow-hidden rounded-3xl border border-white/15 bg-slate-950 shadow-2xl md:hidden"
+                >
+                  {item.show.imageUrl ? (
+                    <img
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      loading="eager"
+                      fetchPriority="low"
+                      src={optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl)}
+                      alt=""
+                      className="absolute inset-0 h-full w-full object-cover opacity-75"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center text-6xl font-bold text-slate-700">{item.show.name?.[0] || "?"}</div>
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/15 to-transparent" />
+                </div>
+              ))}
+
               <button
                 ref={heroPlayButtonRef}
                 id="up-next-hero-play"
@@ -326,11 +421,12 @@ export function UpNextTab({
                 data-tv-focus-key={`up-next:${show.id}:${nextEp.id}`}
                 className="absolute inset-0 z-30 rounded-[2rem] touch-pan-y"
                 aria-label={`${resumePosition !== null ? `Resume from ${formatPlaybackPosition(resumePosition)}` : "Play"} ${show.name}, ${episodeLabel}`}
+                aria-describedby={items.length > 1 ? "up-next-swipe-hint" : undefined}
                 onKeyDown={handleHeroKeyDown}
                 onTouchStart={handleHeroTouchStart}
                 onTouchMove={handleHeroTouchMove}
                 onTouchEnd={finishHeroTouch}
-                onTouchCancel={finishHeroTouch}
+                onTouchCancel={cancelHeroTouch}
                 onClick={handleHeroPlay}
               />
 
@@ -338,9 +434,9 @@ export function UpNextTab({
                 key={`${show.id}:${nextEp.id}`}
                 data-tv-up-next-hero-content="true"
                 data-phone-hero-swipe={heroTransitionDirection === 1 ? "next" : heroTransitionDirection === -1 ? "previous" : undefined}
-                className={`absolute inset-0 will-change-transform ${heroIsDragging ? "transition-none" : "transition-[transform,opacity] duration-200 ease-out"}`}
+                className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging ? "transition-none" : "transition-[transform,opacity] duration-200 ease-out"}`}
                 style={heroDragOffset !== 0 ? {
-                  transform: `translate3d(${heroDragOffset}px, 0, 0)`,
+                  transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg) scale(0.99)`,
                   opacity: 1 - Math.min(Math.abs(heroDragOffset) / 500, 0.28)
                 } : undefined}
                 onAnimationEnd={() => setHeroTransitionDirection(0)}
@@ -395,6 +491,14 @@ export function UpNextTab({
                 </div>
               </div>
             </article>
+
+            {items.length > 1 && (
+              <div id="up-next-swipe-hint" className="md:hidden -mt-1 flex items-center justify-center gap-2 text-xs font-bold text-slate-500 dark:text-slate-400">
+                <span aria-hidden="true" className="text-base text-orange-400">‹</span>
+                <span>Flick left or right</span>
+                <span aria-hidden="true" className="text-base text-orange-400">›</span>
+              </div>
+            )}
 
             {railItems.length > 0 && (
               <div className="flex flex-1 min-w-0 flex-col gap-2 sm:gap-3">

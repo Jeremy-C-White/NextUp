@@ -11,6 +11,16 @@ describe("getCarouselSwipeDirection", () => {
     expect(getCarouselSwipeDirection(35, 4)).toBeNull();
     expect(getCarouselSwipeDirection(40, 90)).toBeNull();
   });
+
+  it("accepts a short, fast thumb flick without treating a slow drag as one", () => {
+    expect(getCarouselSwipeDirection(-30, 4, 48, 60)).toBe(1);
+    expect(getCarouselSwipeDirection(30, 4, 48, 60)).toBe(-1);
+    expect(getCarouselSwipeDirection(30, 4, 48, 500)).toBeNull();
+  });
+
+  it("does not turn a quick vertical gesture into a carousel flick", () => {
+    expect(getCarouselSwipeDirection(30, 55, 48, 50)).toBeNull();
+  });
 });
 
 describe("consumeCarouselWheel", () => {

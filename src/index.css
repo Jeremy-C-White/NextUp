@@ -1105,6 +1105,34 @@
     min-width: min(72vw, 17rem) !important;
   }
 
+  [data-phone-up-next-stack] {
+    isolation: isolate;
+  }
+
+  [data-phone-up-next-stack] > [data-tv-up-next-hero-content] {
+    inset: 0.45rem 0.9rem 0.45rem;
+  }
+
+  [data-phone-up-next-fan-card] {
+    top: 1.2rem;
+    right: 0.25rem;
+    bottom: 0.55rem;
+    left: 0.25rem;
+    pointer-events: none;
+    opacity: 0.76;
+    will-change: transform;
+  }
+
+  [data-phone-up-next-fan-card="previous"] {
+    transform: translate3d(-0.45rem, 0.35rem, 0) rotate(-2.75deg) scale(0.97);
+    transform-origin: 30% 100%;
+  }
+
+  [data-phone-up-next-fan-card="next"] {
+    transform: translate3d(0.45rem, 0.35rem, 0) rotate(2.75deg) scale(0.97);
+    transform-origin: 70% 100%;
+  }
+
   [data-phone-hero-swipe="next"] {
     animation: phone-hero-enter-next 320ms cubic-bezier(0.22, 1, 0.36, 1);
   }

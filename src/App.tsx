@@ -17,9 +17,11 @@ const VideoPlayerModal = lazy(() => import("./components/VideoPlayerModal").then
 const RecommendationModal = lazy(() => import("./components/RecommendationModal").then(m => ({ default: m.RecommendationModal })));
 
 import { UserMenu } from "./components/UserMenu";
-import { AddToCalendarButton } from "./components/AddToCalendarButton";
 import { DiscoverErrorBoundary } from "./components/DiscoverErrorBoundary";
 import { ResumePlaybackDialog } from "./components/ResumePlaybackDialog";
+import { ComingTab } from "./components/ComingTab";
+import { buildComingSchedule } from "./lib/comingSchedule";
+import { LibraryFilter, normalizeLibraryFilter } from "./lib/libraryShelves";
 import { UserShow, Show, UserEpisode, PlaybackRequest } from "./types";
 import { addShowToLibrary, getShowEpisodes, markEpisodeWatched, markEpisodesWatchedBatch, removeShowFromLibrary, removeUndefined, restoreShowToLibrary, setEpisodeProgress } from "./lib/library";
 import { getLibraryDocumentIds } from "./lib/libraryIdentity";
@@ -27,15 +29,15 @@ import { checkAndNotifyUpcomingEpisodes } from "./lib/notifications";
 import { getTrendingShows, getPremieringSoon, resolveTVMazeShow, getShow, getTrendingTVMaze, getHiddenGems, getForYou } from "./lib/tvmaze";
 import { getTrendingTMDB, getTrendingMoviesTMDB, getRecommendationsTMDB, getTMDBIdFromIMDB, getTopShowsByNetwork, getHiddenGemsTMDB, getForYouTMDB, getTMDBExternalIds } from "./lib/tmdb";
 import { getBestAioStreamsSources, warmAioStreamsConnection } from "./lib/debrid";
-import { Tv, Search, LogOut, Settings, CheckCircle2, PlayCircle, Clock, ExternalLink, Compass, X, Calendar, Plus, ChevronLeft, ChevronRight } from "lucide-react";
+import { Tv, Search, LogOut, Settings, CheckCircle2, PlayCircle, Clock, ExternalLink, Compass, X, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { calculateProgress, isEpisodeReleased, getEpisodeReleaseTime, getReleasedEpisodes } from "./lib/episodes";
-import { format, isFuture, formatDistanceToNow } from "date-fns";
+import { format } from "date-fns";
 import { registerSW } from "virtual:pwa-register";
 import { isTvBackKey, isWebOSTV, platformBack } from "./lib/webos";
 import { optimizeArtworkUrl } from "./lib/images";
 import { findNextReleasedEpisode } from "./lib/autoplay";
 import { rankUpNextItems } from "./lib/upNext";
-import { buildEpisodeBacklog, hasRecentUnwatchedEpisode } from "./lib/episodeBacklog";
+import { buildEpisodeBacklog } from "./lib/episodeBacklog";
 import { buildEpisodeProgressSelection } from "./lib/episodeProgress";
 import { buildPlaybackPercentageIndex, clearPlaybackProgress, getResumePosition, readPlaybackProgress } from "./lib/playbackProgress";
 import { resolveBackAction, shouldIgnoreBackPress } from "./lib/backNavigation";
@@ -423,12 +425,9 @@ const loadWithFallback = async (
   const [forYou, setForYou] = useState<Show[]>([]);
   const [networkShows, setNetworkShows] = useState<Record<number, Show[]>>({});
   const [appError, setAppError] = useState<string | null>(null);
-  const [libraryFilter, setLibraryFilter] = useState<"all" | "watching" | "behind" | "new" | "caught-up" | "ended" | "movies">(() => {
-    const saved = readStorageValue("nextup_library_filter");
-    return ["all", "watching", "behind", "new", "caught-up", "ended", "movies"].includes(saved || "")
-      ? saved as "all" | "watching" | "behind" | "new" | "caught-up" | "ended" | "movies"
-      : "all";
-  });
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>(
+    () => normalizeLibraryFilter(readStorageValue("nextup_library_filter"))
+  );
   const [librarySearch, setLibrarySearch] = useState("");
   const [librarySort, setLibrarySort] = useState<"name" | "added" | "progress" | "backlog" | "queue">(() => {
     const saved = readStorageValue("nextup_library_sort");
@@ -1297,7 +1296,7 @@ const loadWithFallback = async (
     };
   }, []);
 
-  const { upNext, recentlyAired, comingSoon, tonight, filteredLibrary } = useMemo(() => {
+  const { upNext, comingSchedule, filteredLibrary } = useMemo(() => {
     const now = new Date();
     const backlogByShow = new Map(shows.map(show => [
       show.id,
@@ -1317,61 +1316,11 @@ const loadWithFallback = async (
       };
     }).filter((item): item is { show: UserShow & { episodes: UserEpisode[] }, nextEp: UserEpisode, progress: number, backlog: ReturnType<typeof buildEpisodeBacklog> } => Boolean(item.nextEp)));
 
-    const recentlyAiredRaw = shows.flatMap(show => {
-      if (show.isMovie) return [];
-      const backlog = backlogByShow.get(show.id)!;
-      return backlog.unwatchedEpisodes
-        .map(episode => ({ show, episode, releaseTime: getEpisodeReleaseTime(episode) }))
-        .filter((item): item is { show: UserShow, episode: UserEpisode, releaseTime: Date } => Boolean(
-          item.releaseTime && now.getTime() - item.releaseTime.getTime() <= 14 * 24 * 60 * 60 * 1000
-        ));
-    }).sort((first, second) => second.releaseTime.getTime() - first.releaseTime.getTime());
-
-    const comingSoonRaw = shows.map(show => {
-      const eps = episodesMap[show.id] || [];
-      const future = eps.filter(e => {
-        const releaseTime = getEpisodeReleaseTime(e);
-        return releaseTime && releaseTime > now;
-      });
-      return { show, nextEp: future[0] };
-    }).filter(s => s.nextEp).sort((a, b) => {
-      const aTime = getEpisodeReleaseTime(a.nextEp)?.getTime() || 0;
-      const bTime = getEpisodeReleaseTime(b.nextEp)?.getTime() || 0;
-      return aTime - bTime;
-    });
-
-    const todayString = format(now, 'yyyy-MM-dd');
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-    
-    const tonightRaw = comingSoonRaw.filter(s => {
-      const releaseTime = getEpisodeReleaseTime(s.nextEp);
-      if (!releaseTime) return s.nextEp.airdate === todayString;
-      // For accurate international (anime) timing, show episodes that air between now and midnight local time
-      return releaseTime > now && releaseTime <= endOfToday;
-    });
-    
-    const horizonRaw = comingSoonRaw.filter(s => !tonightRaw.includes(s));
+    const comingScheduleRaw = buildComingSchedule(shows, episodesMap, now);
 
     let lib = [...shows];
     
-    if (libraryFilter !== "all") {
-      lib = lib.filter(show => {
-        if (libraryFilter === "movies") return !!show.isMovie;
-        if (show.isMovie) return false; // Exclude movies from TV series filters
-
-        const eps = episodesMap[show.id] || [];
-        const backlog = backlogByShow.get(show.id) || buildEpisodeBacklog(eps, show.runtime || 0, now);
-        const caughtUp = backlog.unwatchedCount === 0;
-        
-        if (libraryFilter === "watching") return !caughtUp;
-        if (libraryFilter === "behind") return backlog.unwatchedCount > 1;
-        if (libraryFilter === "new") return backlog.unwatchedCount > 0 && hasRecentUnwatchedEpisode(backlog, now.getTime());
-        if (libraryFilter === "caught-up") return caughtUp && show.status !== "Ended";
-        if (libraryFilter === "ended") return show.status === "Ended";
-        return true;
-      });
-    }
+    // LibraryTab classifies and filters the sorted titles into shelves.
 
     if (librarySearch.trim()) {
       const q = librarySearch.toLowerCase();
@@ -1398,8 +1347,8 @@ const loadWithFallback = async (
       return 0;
     });
 
-    return { upNext: upNextRaw, recentlyAired: recentlyAiredRaw, comingSoon: horizonRaw, tonight: tonightRaw, filteredLibrary: lib };
-  }, [shows, episodesMap, libraryFilter, librarySort, librarySearch, timelineRevision]);
+    return { upNext: upNextRaw, comingSchedule: comingScheduleRaw, filteredLibrary: lib };
+  }, [shows, episodesMap, librarySort, librarySearch, timelineRevision]);
 
   const nextPlaybackRequest = useMemo(() => {
     if (!playbackRequest || playbackRequest.isMovie) return null;
@@ -2080,179 +2029,12 @@ const loadWithFallback = async (
 
         {/* Coming Soon */}
         {activeTab === "coming" && (
-          <section className="space-y-12">
-            {recentlyAired.length > 0 && (
-              <div>
-                <div className="mb-6">
-                  <h2 className="text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">Recently Aired</h2>
-                  <p className="text-slate-600 dark:text-slate-400">Unwatched episodes released during the last 14 days.</p>
-                </div>
-                <div data-tv-section="recently-aired" className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  {recentlyAired.slice(0, 12).map(({ show, episode, releaseTime }) => (
-                    <article
-                      key={`${show.id}:${episode.id}`}
-                      data-tv-cinema-list-card="true"
-                      className="w-full h-full flex gap-6 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 items-start text-left relative group"
-                    >
-                      <button
-                        data-tv-focus-key={`recently-aired:${show.id}:${episode.id}`}
-                        onClick={() => openDetails(show)}
-                        className="absolute inset-0 z-10 rounded-2xl hover:bg-slate-200 dark:hover:bg-slate-800/20 border border-transparent focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all touch-manipulation"
-                      >
-                        <span className="sr-only">View details for {show.name}, season {episode.season} episode {episode.number}</span>
-                      </button>
-                      <div className="w-40 shrink-0 aspect-video bg-slate-200 dark:bg-slate-800 rounded-xl overflow-hidden relative z-0">
-                        {(episode.imageUrl || show.imageUrl) && (
-                          <img
-                            decoding="async"
-                            referrerPolicy="no-referrer"
-                            loading="lazy"
-                            fetchPriority="low"
-                          src={optimizeArtworkUrl(episode.imageUrl || show.imageUrl, "poster")}
-                            alt=""
-                            className="absolute inset-0 w-full h-full object-cover"
-                          />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0 relative z-0">
-                        <div className="text-xs font-bold uppercase tracking-wider text-orange-400 mb-1">
-                          Aired {formatDistanceToNow(releaseTime, { addSuffix: true })}
-                        </div>
-                        <h3 className="text-xl font-display font-bold text-slate-900 dark:text-white mb-1 truncate">{show.name}</h3>
-                        <p className="text-base text-slate-700 dark:text-slate-300 font-medium truncate mb-1">
-                          S{episode.season} E{episode.number} · {episode.name}
-                        </p>
-                        <div className="flex items-center gap-2.5 mt-3 relative z-20 pointer-events-auto">
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handlePlayEpisode(show.id, show.imdbId, episode);
-                            }}
-                            className="px-5 py-2.5 bg-orange-500 hover:bg-orange-400 text-orange-950 text-sm font-bold rounded-xl flex items-center justify-center gap-2 active:scale-95"
-                          >
-                            <PlayCircle className="w-4 h-4" />
-                            Play next
-                          </button>
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            )}
-            {tonight.length > 0 && (
-              <div>
-                <div className="mb-6">
-                  <h2 className="text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">Airing Tonight</h2>
-                  <p className="text-slate-600 dark:text-slate-400">Don't miss these episodes airing today.</p>
-                </div>
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  {tonight.map(({ show, nextEp }) => (
-                    <article 
-                      key={show.id} 
-                      data-tv-cinema-list-card="true"
-                      className="w-full h-full flex gap-6 p-4 rounded-2xl bg-orange-500/5 border border-orange-500/20 items-start text-left relative group hover:border-orange-500/40 transition-colors"
-                    >
-                      <button
-                        data-tv-focus-key={`coming:tonight:${show.id}`}
-                        onClick={() => openDetails(show)}
-                        className="absolute inset-0 z-10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all touch-manipulation"
-                      >
-                        <span className="sr-only">View Details for {show.name}</span>
-                      </button>
-                      <div className="w-24 shrink-0 aspect-[2/3] bg-slate-200 dark:bg-slate-800 rounded-xl overflow-hidden relative z-0">
-                    {show.imageUrl && <img decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={optimizeArtworkUrl(show.imageUrl, "poster")} alt="" className="w-full h-full object-cover" />}
-                      </div>
-                      <div className="flex-1 min-w-0 relative z-0">
-                        <div className="flex items-center gap-2 mb-1 min-w-0">
-                          <span className="text-xs font-bold uppercase tracking-wider text-orange-400 whitespace-nowrap shrink-0">Tonight &middot; {format(getEpisodeReleaseTime(nextEp) || new Date(), "h:mm a")}</span>
-                          {show.provider && show.provider !== "Unknown Provider" && show.provider !== "Unknown" && (
-                            <span className="text-xs text-slate-500 dark:text-slate-400 truncate">&middot; {show.provider}</span>
-                          )}
-                        </div>
-                        <h3 className="text-xl font-display font-bold text-slate-900 dark:text-white mb-1 truncate">{show.name}</h3>
-                        <p className="text-base text-slate-700 dark:text-slate-300 font-medium truncate mb-1">{show.isMovie ? "Movie ·" : `S${nextEp.season} E${nextEp.number} ·`} {nextEp.name}</p>
-                        {nextEp.summary && (
-                          <ExpandableText 
-                            text={nextEp.summary} 
-                            className="text-sm text-slate-500 dark:text-slate-400 leading-snug mb-3" 
-                            limit={120}
-                          />
-                        )}
-                        <div className="flex flex-wrap items-center gap-2.5 mt-2 relative z-20 pointer-events-auto">
-                          <AddToCalendarButton 
-                            showName={show.name}
-                            season={nextEp.season}
-                            number={nextEp.number}
-                            epTitle={nextEp.name}
-                            airstamp={getEpisodeReleaseTime(nextEp)?.toISOString() || ""}
-                            runtimeMinutes={show.runtime}
-                          />
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div>
-              <div className="mb-6">
-                <h2 className="text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">On the horizon</h2>
-                <p className="text-slate-600 dark:text-slate-400">Upcoming episodes for your saved shows.</p>
-              </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {comingSoon.length === 0 ? (
-                <div className="text-slate-500 dark:text-slate-400 py-12 text-center border border-slate-200 dark:border-slate-800 border-dashed rounded-3xl bg-slate-100 dark:bg-slate-900/30">No announced future episodes.</div>
-              ) : (
-                comingSoon.map(({ show, nextEp }) => (
-                  <article 
-                    key={show.id} 
-                    data-tv-cinema-list-card="true"
-                    className="w-full h-full flex gap-6 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 items-start text-left relative group"
-                  >
-                    <button
-                      data-tv-focus-key={`coming:horizon:${show.id}`}
-                        onClick={() => openDetails(show)}
-                      className="absolute inset-0 z-10 rounded-2xl hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800/20 border border-transparent focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all touch-manipulation"
-                    >
-                      <span className="sr-only">View Details for {show.name}</span>
-                    </button>
-                    <div className="w-24 shrink-0 aspect-[2/3] bg-slate-200 dark:bg-slate-800 rounded-xl overflow-hidden relative z-0">
-                      {show.imageUrl && <img decoding="async" referrerPolicy="no-referrer" loading="lazy" fetchPriority="low" src={optimizeArtworkUrl(show.imageUrl, "poster")} alt="" className="w-full h-full object-cover" />}
-                    </div>
-                    <div className="flex-1 min-w-0 relative z-0">
-                      <h3 className="text-xl font-display font-bold text-slate-900 dark:text-white mb-1 truncate">{show.name}</h3>
-                      <p className="text-base text-slate-700 dark:text-slate-300 font-medium truncate mb-1">{show.isMovie ? "Movie ·" : `S${nextEp.season} E${nextEp.number} ·`} {nextEp.name}</p>
-                      {nextEp.summary && (
-                        <ExpandableText 
-                          text={nextEp.summary} 
-                          className="text-sm text-slate-500 dark:text-slate-400 leading-snug mb-3" 
-                          limit={120}
-                        />
-                      )}
-                      <div className="flex flex-wrap items-center gap-2.5 mt-2 relative z-20 pointer-events-auto">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-500/10 rounded-xl border border-orange-500/20 text-orange-400 text-xs font-bold tracking-wide uppercase">
-                          <Calendar className="w-3.5 h-3.5 shrink-0" />
-                          <span>{format(getEpisodeReleaseTime(nextEp) || new Date(), "MMM d")}</span>
-                          <span className="opacity-40">&middot;</span>
-                          <span className="text-orange-300/90 font-medium">in {formatDistanceToNow(getEpisodeReleaseTime(nextEp) || new Date())}</span>
-                        </div>
-                        <AddToCalendarButton 
-                          showName={show.name}
-                          season={nextEp.season}
-                          number={nextEp.number}
-                          epTitle={nextEp.name}
-                          airstamp={getEpisodeReleaseTime(nextEp)?.toISOString() || ""}
-                          runtimeMinutes={show.runtime}
-                        />
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </div>
-        </section>
+          <ComingTab
+            schedule={comingSchedule}
+            onOpenDetails={openDetails}
+            onPlayEpisode={(show, episode) => handlePlayEpisode(show.id, show.imdbId, episode)}
+            rowStorageKeyPrefix={user?.uid ? `${user.uid}:` : ""}
+          />
         )}
         {activeTab === "library" && (
           <LibraryTab
@@ -2267,6 +2049,7 @@ const loadWithFallback = async (
             librarySearch={librarySearch}
             setLibrarySearch={setLibrarySearch}
             playbackPercentageByShow={playbackPercentageByShow}
+            rowStorageKeyPrefix={user?.uid ? `${user.uid}:` : ""}
           />
         )}
       </div>
