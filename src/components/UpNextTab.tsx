@@ -117,7 +117,7 @@ export function UpNextTab({
   const activeTitleLogo = useTitleLogo(activeItem?.show);
   const queueSummary = useMemo(() => {
     const episodes = items.reduce((total, item) => total + item.backlog.unwatchedCount, 0);
-    return `${items.length} ${items.length === 1 ? "show" : "shows"} · ${episodes} unwatched ${episodes === 1 ? "episode" : "episodes"}`;
+    return `${items.length} ${items.length === 1 ? "show" : "shows"} \u00b7 ${episodes} unwatched ${episodes === 1 ? "episode" : "episodes"}`;
   }, [items]);
 
   const railItems = useMemo(() => {
@@ -423,8 +423,7 @@ export function UpNextTab({
         onStatusChange={setThemeStatus}
       />
       <div className="tv-up-next-heading flex flex-wrap items-center gap-x-4 gap-y-1">
-        <h2 className="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-slate-900 dark:text-white tracking-tight whitespace-nowrap">Next Up</h2>
-        {items.length > 0 && <p className="order-3 w-full sm:order-none sm:w-auto truncate text-slate-600 dark:text-slate-400 text-sm sm:text-base">{queueSummary}</p>}
+        {items.length > 0 && <p className="min-w-0 flex-1 truncate text-slate-600 dark:text-slate-400 text-sm sm:text-base">{queueSummary}</p>}
         {themeStatus === "blocked" && themeMusicEnabled && (
           <button
             type="button"
@@ -458,7 +457,7 @@ export function UpNextTab({
         const releaseTime = getEpisodeReleaseTime(nextEp);
         const episodeLabel = show.isMovie
           ? "Feature Film"
-          : `Season ${nextEp.season}, Episode ${nextEp.number} · ${nextEp.name}`;
+          : `Season ${nextEp.season}, Episode ${nextEp.number} \u00b7 ${nextEp.name}`;
         const visibleThumbnailCount = railItems.length > 3
           ? 3.35
           : Math.max(1, railItems.length);

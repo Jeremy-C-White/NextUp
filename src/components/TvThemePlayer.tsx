@@ -1,6 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { UserShow } from "../types";
-import { markTvThemeUnavailable, resolveTvThemeUrl } from "../lib/tvThemes";
+import { markTvThemeUnavailable, readThemePreviewsEnabled, resolveTvThemeUrl } from "../lib/tvThemes";
+import { forgetFallbackTheme, resolveFallbackTheme } from "../lib/themeMusic";
+import { formatPlaybackDiagnostic } from "../lib/playbackDiagnostics";
 
 const FOCUS_SETTLE_DELAY_MS = 500;
 const FADE_IN_MS = 500;
@@ -13,16 +15,32 @@ export interface TvThemePlayerHandle {
   play: () => void;
 }
 
+export interface TvThemeTrackInfo {
+  showId: string;
+  source: "plex" | "deezer";
+  title?: string;
+  artist?: string;
+  /** Deezer track id, used for "Not this song". */
+  trackId?: number;
+}
+
 interface TvThemePlayerProps {
   show?: UserShow;
   enabled: boolean;
   onStatusChange: (status: TvThemePlaybackStatus) => void;
+  onTrackChange?: (track: TvThemeTrackInfo | null) => void;
+  /** Bump to re-resolve the current title's theme (after "Not this song"). */
+  refreshToken?: number;
 }
 
+type ThemePlayResult = "playing" | "failed" | "blocked" | "cancelled";
+
 export const TvThemePlayer = forwardRef<TvThemePlayerHandle, TvThemePlayerProps>(function TvThemePlayer(
-  { show, enabled, onStatusChange },
+  { show, enabled, onStatusChange, onTrackChange, refreshToken = 0 },
   ref
 ) {
+  const onTrackChangeRef = useRef(onTrackChange);
+  onTrackChangeRef.current = onTrackChange;
   const audioRef = useRef<HTMLAudioElement>(null);
   const startTimerRef = useRef<number | null>(null);
   const fadeTimerRef = useRef<number | null>(null);
@@ -87,14 +105,45 @@ export const TvThemePlayer = forwardRef<TvThemePlayerHandle, TvThemePlayerProps>
     }, 40);
   };
 
+  const playThemeUrl = (url: string, token: number): Promise<ThemePlayResult> => new Promise(resolve => {
+    const audio = audioRef.current;
+    if (!audio || token !== requestTokenRef.current) {
+      resolve("cancelled");
+      return;
+    }
+    let settled = false;
+    const settle = (result: ThemePlayResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(token === requestTokenRef.current ? result : "cancelled");
+    };
+
+    clearFadeTimer();
+    audio.volume = 0;
+    audio.preload = "auto";
+    audio.src = url;
+    audio.onended = () => {
+      if (token === requestTokenRef.current) {
+        onStatusChange("idle");
+        onTrackChangeRef.current?.(null);
+      }
+    };
+    audio.onerror = () => settle("failed");
+    audio.play()
+      .then(() => settle("playing"))
+      .catch((error: unknown) => {
+        const name = (error as { name?: string } | null)?.name;
+        settle(name === "NotAllowedError" ? "blocked" : "failed");
+      });
+  });
+
   useImperativeHandle(ref, () => ({
     play: () => {
       const audio = audioRef.current;
       if (!audio || !enabled || !audio.src) return;
       const token = requestTokenRef.current;
       audio.volume = 0;
-      const attempt = audio.play();
-      void Promise.resolve(attempt).then(() => {
+      void audio.play().then(() => {
         if (token !== requestTokenRef.current) return;
         onStatusChange("playing");
         fadeIn(token);
@@ -109,49 +158,96 @@ export const TvThemePlayer = forwardRef<TvThemePlayerHandle, TvThemePlayerProps>
     clearStartTimer();
     fadeOut();
     onStatusChange("idle");
+    onTrackChangeRef.current?.(null);
 
-    if (!enabled || !show || show.isMovie) return;
+    if (!enabled || !show) return;
 
     startTimerRef.current = window.setTimeout(async () => {
       startTimerRef.current = null;
       if (token !== requestTokenRef.current) return;
       onStatusChange("loading");
 
-      const themeUrl = await resolveTvThemeUrl(show);
-      if (token !== requestTokenRef.current) return;
-      if (!themeUrl) {
+      const startPlaying = (track: TvThemeTrackInfo) => {
+        onStatusChange("playing");
+        onTrackChangeRef.current?.(track);
+        fadeIn(token);
+        console.info(formatPlaybackDiagnostic("theme music", {
+          source: track.source,
+          show: show.name,
+          title: track.title,
+          artist: track.artist
+        }));
+      };
+
+      // 1. Plex TV theme library (TV shows only, full-length themes).
+      if (!show.isMovie) {
+        const plexUrl = await resolveTvThemeUrl(show);
+        if (token !== requestTokenRef.current) return;
+        if (plexUrl) {
+          const result = await playThemeUrl(plexUrl, token);
+          if (result === "cancelled") return;
+          if (result === "playing") {
+            startPlaying({ showId: show.id, source: "plex" });
+            return;
+          }
+          if (result === "blocked") {
+            // iPhone Safari may require one explicit tap. Keep this exact
+            // resolved source loaded for the visible Play theme button.
+            onStatusChange("blocked");
+            return;
+          }
+          markTvThemeUnavailable(plexUrl);
+        }
+      }
+
+      // 2. ThemerrDB pick + Deezer 30-second preview (movies, and shows Plex lacks).
+      if (!readThemePreviewsEnabled()) {
+        resetAudio();
         onStatusChange("unavailable");
+        console.info(formatPlaybackDiagnostic("theme music unavailable", {
+          show: show.name,
+          why: "soundtrack-previews-off-in-settings"
+        }));
+        return;
+      }
+      let fallback = null;
+      try {
+        fallback = await resolveFallbackTheme(show);
+      } catch {
+        fallback = null;
+      }
+      if (token !== requestTokenRef.current) return;
+      if (!fallback) {
+        resetAudio();
+        onStatusChange("unavailable");
+        console.info(formatPlaybackDiagnostic("theme music unavailable", {
+          show: show.name,
+          why: show.isMovie ? "no-matching-soundtrack" : "no-plex-theme-or-matching-soundtrack"
+        }));
         return;
       }
 
-      const audio = audioRef.current;
-      if (!audio) return;
-      clearFadeTimer();
-      audio.volume = 0;
-      audio.preload = "auto";
-      audio.src = themeUrl;
-      audio.onended = () => {
-        if (token === requestTokenRef.current) onStatusChange("idle");
-      };
-      audio.onerror = () => {
-        markTvThemeUnavailable(themeUrl);
-        if (token === requestTokenRef.current) onStatusChange("unavailable");
+      const result = await playThemeUrl(fallback.track.previewUrl, token);
+      if (result === "cancelled") return;
+      if (result === "playing") {
+        startPlaying({
+          showId: show.id,
+          source: "deezer",
+          title: fallback.track.title,
+          artist: fallback.track.artist,
+          trackId: fallback.track.id
+        });
+        return;
+      }
+      // Deezer preview links are signed and expire: forget this lookup so the
+      // next visit asks again instead of reusing a dead link.
+      forgetFallbackTheme(show.id);
+      if (result === "blocked") {
+        // Preserve the signed Deezer preview URL for the user's tap gesture.
+        onStatusChange("blocked");
+      } else {
         resetAudio();
-      };
-
-      try {
-        await audio.play();
-        if (token !== requestTokenRef.current) {
-          fadeOut();
-          return;
-        }
-        onStatusChange("playing");
-        fadeIn(token);
-      } catch {
-        // iPhone Safari commonly requires one explicit tap before allowing
-        // audio. Keep the resolved theme loaded so the visible retry button
-        // can start this exact media element inside the user's tap gesture.
-        if (token === requestTokenRef.current) onStatusChange("blocked");
+        onStatusChange("unavailable");
       }
     }, FOCUS_SETTLE_DELAY_MS);
 
@@ -160,7 +256,7 @@ export const TvThemePlayer = forwardRef<TvThemePlayerHandle, TvThemePlayerProps>
       clearStartTimer();
       fadeOut();
     };
-  }, [enabled, show?.id, show?.thetvdbId, show?.tvmazeId, show?._tmdbId, onStatusChange]);
+  }, [enabled, show?.id, show?.thetvdbId, show?.tvmazeId, show?._tmdbId, show?.isMovie, refreshToken, onStatusChange]);
 
   useEffect(() => () => {
     ++requestTokenRef.current;

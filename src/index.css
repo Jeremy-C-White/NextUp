@@ -1171,6 +1171,11 @@
   }
 
   [data-tv-bottom-nav-shell] {
+    position: fixed !important;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
     padding-right: env(safe-area-inset-right);
     padding-left: env(safe-area-inset-left);
     box-shadow: 0 -12px 36px rgb(2 6 23 / 10%);
@@ -1376,9 +1381,14 @@
     radial-gradient(ellipse at 35% 36%, transparent 0%, rgb(2 6 23 / 48%) 70%, rgb(2 6 23 / 78%) 100%);
 }
 
-.nextup-cinema.tv-up-next-shell > :not([data-tv-ambient]) {
+.nextup-cinema.tv-up-next-shell > [data-tv-main] {
   position: relative;
   z-index: 1;
+}
+
+.nextup-cinema.tv-up-next-shell > [data-tv-app-header],
+.nextup-cinema.tv-up-next-shell > [data-tv-bottom-nav-shell] {
+  z-index: 40;
 }
 
 @keyframes phone-title-logo-in {

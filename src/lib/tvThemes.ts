@@ -4,6 +4,7 @@ import { getShow } from "./tvmaze";
 
 const PLEX_TV_THEME_BASE_URL = "https://tvthemes.plexapp.com";
 const THEME_MUSIC_ENABLED_KEY = "NEXTUP_THEME_MUSIC_ENABLED";
+const THEME_PREVIEWS_ENABLED_KEY = "NEXTUP_THEME_PREVIEWS_ENABLED";
 const tvdbLookupCache = new Map<string, Promise<number | null>>();
 const unavailableThemeUrls = new Set<string>();
 
@@ -32,6 +33,25 @@ export function saveThemeMusicEnabled(enabled: boolean): void {
     localStorage.setItem(THEME_MUSIC_ENABLED_KEY, String(enabled));
   } catch {
     // Theme music remains usable for this session when storage is unavailable.
+  }
+}
+
+/** ThemerrDB-guided Deezer previews for movies and shows Plex does not cover. */
+export function readThemePreviewsEnabled(): boolean {
+  if (typeof localStorage === "undefined") return true;
+  try {
+    return localStorage.getItem(THEME_PREVIEWS_ENABLED_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function saveThemePreviewsEnabled(enabled: boolean): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(THEME_PREVIEWS_ENABLED_KEY, String(enabled));
+  } catch {
+    // The setting still applies for this session when storage is unavailable.
   }
 }
 

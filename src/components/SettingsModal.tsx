@@ -15,6 +15,7 @@ import {
 } from '../lib/notifications';
 import { fetchThroughProxy } from '../lib/webos';
 import { getTMDBApiKey, saveTMDBApiKey } from '../lib/tmdb';
+import { readThemePreviewsEnabled, saveThemePreviewsEnabled } from '../lib/tvThemes';
 import {
   getOpenSubtitlesApiKey,
   saveOpenSubtitlesApiKey,
@@ -40,6 +41,12 @@ export function SettingsModal({
   autoSkipEnabled,
   onAutoSkipEnabledChange
 }: SettingsModalProps) {
+  const [themePreviewsEnabled, setThemePreviewsEnabled] = useState(readThemePreviewsEnabled);
+  const toggleThemePreviews = () => {
+    const next = !themePreviewsEnabled;
+    saveThemePreviewsEnabled(next);
+    setThemePreviewsEnabled(next);
+  };
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [error, setError] = useState('');
@@ -401,7 +408,7 @@ export function SettingsModal({
             </span>
           </div>
           <p className="text-slate-600 dark:text-slate-400 text-sm mb-4">
-            Stay on a series in Up Next for half a second and its short Plex theme will fade in at low volume when available. If iPhone asks for permission, tap Play theme once.
+            Stay on a title in Up Next for half a second and its theme fades in at low volume. Series use their Plex theme first; movies and missing themes can use a soundtrack preview. If iPhone asks, tap Play theme once.
           </p>
           <button
             type="button"
@@ -416,6 +423,32 @@ export function SettingsModal({
             <Music2 className="w-4 h-4" />
             {themeMusicEnabled ? 'Mute Theme Music' : 'Enable Theme Music'}
           </button>
+
+          <div className="flex items-center justify-between gap-4 mt-5 mb-2">
+            <h4 className="text-base font-bold text-slate-900 dark:text-white">Soundtrack previews</h4>
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+              themePreviewsEnabled
+                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                : 'bg-slate-500/10 text-slate-500 border-slate-500/20'
+            }`}>
+              {themePreviewsEnabled ? 'On' : 'Off'}
+            </span>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 text-sm mb-3">
+            For movies, and series without a Plex theme, play a carefully matched 30-second preview of the title theme or main soundtrack track.
+          </p>
+          <button
+            type="button"
+            onClick={toggleThemePreviews}
+            aria-pressed={themePreviewsEnabled}
+            className="w-full py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white hover:bg-slate-300 dark:hover:bg-slate-700"
+          >
+            {themePreviewsEnabled ? 'Turn Off Soundtrack Previews' : 'Turn On Soundtrack Previews'}
+          </button>
+
+          <p className="text-slate-500 dark:text-slate-500 text-xs mt-4 leading-relaxed">
+            Music credits: TV themes from Plex. Theme selections from ThemerrDB and its community contributors. Soundtrack previews provided by Deezer.
+          </p>
         </div>
 
         <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">
@@ -448,6 +481,7 @@ export function SettingsModal({
             <SkipForward className="w-4 h-4" />
             {autoSkipEnabled ? 'Auto-skip Intros & Recaps: On' : 'Turn On Auto-skip'}
           </button>
+
         </div>
 
         <div className="border-t border-slate-200 dark:border-slate-800 pt-8 mt-6">

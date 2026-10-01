@@ -3,8 +3,10 @@ import {
   clearTvThemeRuntimeCache,
   getPlexTvThemeUrl,
   readThemeMusicEnabled,
+  readThemePreviewsEnabled,
   resolveTvThemeUrl,
-  saveThemeMusicEnabled
+  saveThemeMusicEnabled,
+  saveThemePreviewsEnabled
 } from "./tvThemes";
 
 const originalLocalStorage = global.localStorage;
@@ -45,5 +47,19 @@ describe("TV theme music", () => {
     expect(readThemeMusicEnabled()).toBe(true);
     saveThemeMusicEnabled(false);
     expect(readThemeMusicEnabled()).toBe(false);
+  });
+
+  test("keeps soundtrack previews enabled by default and remembers a choice", () => {
+    const values = new Map<string, string>();
+    global.localStorage = {
+      getItem: vi.fn(key => values.get(key) || null),
+      setItem: vi.fn((key, value) => values.set(key, value)),
+      removeItem: vi.fn(key => values.delete(key)),
+      clear: vi.fn(() => values.clear())
+    } as unknown as Storage;
+
+    expect(readThemePreviewsEnabled()).toBe(true);
+    saveThemePreviewsEnabled(false);
+    expect(readThemePreviewsEnabled()).toBe(false);
   });
 });
