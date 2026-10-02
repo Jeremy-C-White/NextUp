@@ -259,48 +259,6 @@ export function srtToWebVtt(input: string): string {
   return `WEBVTT\n\n${converted}\n`;
 }
 
-function parseWebVttTimestamp(value: string): number {
-  const parts = value.split(":").map(Number);
-  if (parts.some(part => !Number.isFinite(part))) return 0;
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  return parts[0] * 60 + parts[1];
-}
-
-function formatWebVttTimestamp(seconds: number): string {
-  const milliseconds = Math.max(0, Math.round(seconds * 1000));
-  const hours = Math.floor(milliseconds / 3_600_000);
-  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
-  const secs = Math.floor((milliseconds % 60_000) / 1000);
-  const ms = milliseconds % 1000;
-  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(3, "0")}`;
-}
-
-/**
- * A restarted HLS session begins its media timeline at zero. Shift cached
- * full-title captions by the same source offset so Safari displays the right
- * cue after resume, skip-intro, or scrubbing.
- */
-export function shiftWebVttForPlaybackOffset(input: string, offsetSeconds: number): string {
-  const offset = Math.max(0, Number.isFinite(offsetSeconds) ? offsetSeconds : 0);
-  const normalized = input.replace(/\r\n?/g, "\n").trim();
-  if (offset === 0 || !normalized) return `${normalized}\n`;
-
-  const timingPattern = /((?:\d{2,}:)?\d{2}:\d{2}\.\d{3})\s+-->\s+((?:\d{2,}:)?\d{2}:\d{2}\.\d{3})([^\n]*)/;
-  const shiftedBlocks = normalized.split(/\n{2,}/).flatMap(block => {
-    const timing = block.match(timingPattern);
-    if (!timing) return [block];
-
-    const start = parseWebVttTimestamp(timing[1]);
-    const end = parseWebVttTimestamp(timing[2]);
-    if (end <= offset) return [];
-
-    const shiftedTiming = `${formatWebVttTimestamp(Math.max(0, start - offset))} --> ${formatWebVttTimestamp(end - offset)}${timing[3]}`;
-    return [block.replace(timingPattern, shiftedTiming)];
-  });
-
-  return `${shiftedBlocks.join("\n\n")}\n`;
-}
-
 function buildCacheKey(request: ExternalSubtitleRequest): string {
   const release = Array.from(releaseTokens(request.releaseName || "")).sort().join("-").slice(0, 120);
   return [request.imdbId.toLocaleLowerCase(), request.season || 0, request.episode || 0, release].join(":");

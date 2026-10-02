@@ -1,9 +1,6 @@
-import "dotenv/config";
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { createTranscoderRouter } from "./src/server/transcoder/routes.js";
-import { TranscodeSessionManager } from "./src/server/transcoder/sessionManager.js";
 
 async function startServer() {
   const app = express();
@@ -15,11 +12,6 @@ async function startServer() {
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
-
-  // Keep MKV playback inside NextUp. The browser asks this same-origin API to
-  // remux or transcode an otherwise incompatible source into native iPhone HLS.
-  const transcodeSessions = new TranscodeSessionManager();
-  app.use("/api/transcode", createTranscoderRouter(transcodeSessions));
 
   app.get("/api/debrid/stream", async (req, res) => {
     const targetUrl = req.query.url as string;
@@ -95,19 +87,9 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
-
-  let shuttingDown = false;
-  const shutdown = () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    transcodeSessions.stop();
-    server.close(() => process.exit(0));
-  };
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
 }
 
 startServer();

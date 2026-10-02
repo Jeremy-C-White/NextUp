@@ -15,7 +15,7 @@ export default defineConfig(() => {
         manifest: {
           name: 'NextUp Phone',
           short_name: 'Phone',
-          description: 'NextUp with MP4-first playback and seamless in-app MKV streaming.',
+          description: 'NextUp v1.0.59 with MP4/HLS-first phone playback and VLC fallback for MKV.',
           start_url: '.',
           scope: '.',
           display: 'standalone',

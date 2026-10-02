@@ -84,16 +84,4 @@ describe("VLC fallback", () => {
       `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(streamUrl)}`
     );
   });
-
-  it("prefers remux-friendly MKV video before expensive phone conversions", () => {
-    const selected = selectVlcFallbackCandidates([
-      candidate("av1", "mkv", "external", "1080p", "av1", "aac"),
-      candidate("hi10", "mkv", "external", "Hi10P 1080p", "h264", "aac"),
-      candidate("hevc", "mkv", "external", "1080p", "hevc", "dts"),
-      candidate("h264", "mkv", "external", "1080p", "h264", "dts")
-    ]);
-
-    expect(selected.slice(0, 2).map(item => item.id)).toEqual(["h264", "hevc"]);
-    expect(new Set(selected.slice(2).map(item => item.id))).toEqual(new Set(["av1", "hi10"]));
-  });
 });
