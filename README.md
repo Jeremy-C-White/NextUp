@@ -51,3 +51,5 @@ npm run start
 The complete app runs from its Node server. That server provides the same-origin stream-provider proxy and the private FFmpeg-backed HLS sessions used to keep MKV playback inside NextUp.
 
 A static deployment can still use native MP4/HLS sources, but it cannot provide internal MKV conversion and will fall back to VLC. For seamless MKV playback, deploy the built Node server in an environment where FFmpeg and FFprobe are installed and temporary storage is writable.
+
+GitHub Pages is a static preview only. Install the iPhone home-screen shortcut from the Node-hosted address if you want in-app MKV playback; a Pages address cannot run FFmpeg.

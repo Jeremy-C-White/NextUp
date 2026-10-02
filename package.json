@@ -1,7 +1,7 @@
 {
   "name": "nextup-phone",
   "private": true,
-  "version": "1.0.59-phone.17",
+  "version": "1.0.59-phone.18",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "date-fns": "^4.4.0",
+    "dotenv": "^16.4.7",
     "express": "^5.2.1",
     "firebase": "^12.16.0",
     "lucide-react": "^0.546.0",

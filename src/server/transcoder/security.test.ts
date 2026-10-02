@@ -63,28 +63,24 @@ describe("Transcoder Security Module", () => {
   describe("Session Tokens", () => {
     it("generates and verifies valid session tokens", () => {
       const sessionId = "session-123";
-      const clientIp = "192.0.2.1";
-      const token = generateSessionToken(sessionId, clientIp);
+      const token = generateSessionToken(sessionId);
 
-      const result = verifySessionToken(sessionId, token, clientIp);
+      const result = verifySessionToken(sessionId, token);
       expect(result.valid).toBe(true);
     });
 
-    it("rejects tokens for mismatched session ID or client IP", () => {
+    it("rejects tokens for a mismatched session while allowing an IP change", () => {
       const sessionId = "session-123";
-      const clientIp = "192.0.2.1";
-      const token = generateSessionToken(sessionId, clientIp);
+      const token = generateSessionToken(sessionId);
 
-      const wrongSession = verifySessionToken("session-999", token, clientIp);
+      const wrongSession = verifySessionToken("session-999", token);
       expect(wrongSession.valid).toBe(false);
-
-      const wrongIp = verifySessionToken(sessionId, token, "192.0.2.99");
-      expect(wrongIp.valid).toBe(false);
+      expect(verifySessionToken(sessionId, token).valid).toBe(true);
     });
 
     it("rejects malformed or tampered tokens", () => {
-      expect(verifySessionToken("s1", "invalid-token", "1.1.1.1").valid).toBe(false);
-      expect(verifySessionToken("s1", "12345.badhex", "1.1.1.1").valid).toBe(false);
+      expect(verifySessionToken("s1", "invalid-token").valid).toBe(false);
+      expect(verifySessionToken("s1", "12345.badhex").valid).toBe(false);
     });
   });
 

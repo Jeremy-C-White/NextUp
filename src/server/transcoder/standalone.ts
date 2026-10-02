@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { execSync } from "child_process";
 import { createTranscoderRouter } from "./routes.js";

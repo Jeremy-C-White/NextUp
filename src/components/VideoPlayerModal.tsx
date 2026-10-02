@@ -12,7 +12,8 @@ import { findEnglishSubtitleTrackIndex, findPreferredSubtitleTrackIndex, isMeani
 import {
   fetchExternalEnglishSubtitle,
   getOpenSubtitlesApiKey,
-  OpenSubtitlesError
+  OpenSubtitlesError,
+  shiftWebVttForPlaybackOffset
 } from "../lib/externalSubtitles";
 import {
   CREDITS_AUTOPLAY_COUNTDOWN_SECONDS,
@@ -71,6 +72,7 @@ import { getSkipDBSegments, mergeSkipSegments, needsSkipDBFallback } from "../li
 
 const SOURCE_PROOF_MEDIA_SECONDS = 8;
 const SOURCE_PROOF_STALL_RESET_MS = 3_000;
+const MAX_AUTOMATIC_INTERNAL_MKV_ATTEMPTS = 3;
 
 const formatBytes = (bytes?: number) => {
   if (!bytes) return "";
@@ -305,6 +307,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const [subtitleStatus, setSubtitleStatus] = useState("Automatic subtitles ready");
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [playbackClock, setPlaybackClock] = useState({ current: 0, duration: 0, playing: false });
+  const [seekPreviewSeconds, setSeekPreviewSeconds] = useState<number | null>(null);
   const [introDBSegments, setIntroDBSegments] = useState<IntroDBSegments>({});
   const [introDBLookupStatus, setIntroDBLookupStatus] = useState<"idle" | "pending" | "done" | "failed">("idle");
   const [ignoredSegmentTypes, setIgnoredSegmentTypes] = useState<IntroDBSegmentType[]>([]);
@@ -350,6 +353,9 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const activeTranscodeRef = useRef<ActiveTranscodePlayback | null>(null);
   const transcodeGenerationRef = useRef(0);
   const transcodeSeekAutoplayRef = useRef(false);
+  const transcodeSeekInFlightRef = useRef(false);
+  const transcodeRecoveryCountRef = useRef(0);
+  const seekPreviewSecondsRef = useRef<number | null>(null);
 
   // Mutable refs to eliminate stale closure issues in timers & event handlers
   const playableCandidatesRef = useRef<PlaybackCandidate[]>([]);
@@ -499,6 +505,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       // Source memory is an optimization and never blocks playback.
     }
     proof.saved = true;
+    transcodeRecoveryCountRef.current = 0;
     currentProvenCandidateRef.current = candidate;
   }, [getCurrentSourceContext]);
 
@@ -800,7 +807,9 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         return;
       }
 
-      const objectUrl = URL.createObjectURL(new Blob([subtitle.vtt], { type: "text/vtt;charset=utf-8" }));
+      const captionOffset = activeTranscodeRef.current?.startTime || 0;
+      const alignedVtt = shiftWebVttForPlaybackOffset(subtitle.vtt, captionOffset);
+      const objectUrl = URL.createObjectURL(new Blob([alignedVtt], { type: "text/vtt;charset=utf-8" }));
       const trackElement = document.createElement("track");
       trackElement.kind = "captions";
       trackElement.srclang = "en";
@@ -1029,23 +1038,25 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setAutoplayBlocked(false);
     setIsLoading(true);
     setIsMidstreamBuffering(false);
+    if (manual) transcodeRecoveryCountRef.current = 0;
 
     const client = transcoderClientRef.current;
-    setStatusText("Preparing secure in-app MKV playback...");
+    setStatusText("Making this video iPhone-ready...");
     if (!await client.isHealthy()) {
       if (generation !== transcodeGenerationRef.current) return false;
       showVlcFallback("The in-app MKV service is unavailable, so VLC remains available as a backup.");
       return false;
     }
 
-    for (let index = startIndex; index < internalCandidates.length; index++) {
+    const attemptEnd = Math.min(internalCandidates.length, startIndex + MAX_AUTOMATIC_INTERNAL_MKV_ATTEMPTS);
+    for (let index = startIndex; index < attemptEnd; index++) {
       if (generation !== transcodeGenerationRef.current) return false;
       const candidate = internalCandidates[index];
       const requestedStart = Math.max(
         0,
         sameSessionFailoverPositionRef.current ?? resumePositionRef.current ?? 0
       );
-      setStatusText(`Preparing MKV source ${index + 1} of ${internalCandidates.length} inside NextUp...`);
+      setStatusText(`Making this video iPhone-ready â€” option ${index - startIndex + 1} of ${attemptEnd - startIndex}...`);
 
       try {
         const session = await client.startSession({
@@ -1098,7 +1109,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     }
 
     if (generation === transcodeGenerationRef.current) {
-      showVlcFallback("NextUp tried every internal MKV option, but the server could not prepare one.");
+      showVlcFallback("NextUp tried the best internal MKV options, but the server could not prepare one.");
     }
     return false;
   }, [resetPlaybackProof, resetSubtitleAssist, showVlcFallback, stopActiveTranscode, updateActiveTranscode]);
@@ -1137,6 +1148,15 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
     const activeInternalSource = activeTranscodeRef.current;
     if (activeInternalSource) {
+      if (!manual && playbackProofRef.current.saved && transcodeRecoveryCountRef.current < 1) {
+        transcodeRecoveryCountRef.current += 1;
+        const currentInternalIndex = activeInternalSource.candidateIndex;
+        stopActiveTranscode();
+        setStatusText("Reconnecting to the same video...");
+        void startInternalMkvFallback(currentInternalIndex, false);
+        return;
+      }
+      transcodeRecoveryCountRef.current = 0;
       const nextInternalIndex = activeInternalSource.candidateIndex + 1;
       stopActiveTranscode();
       void startInternalMkvFallback(nextInternalIndex, manual);
@@ -1306,6 +1326,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setAudioStatus("English audio preferred");
     setSubtitleStatus("Automatic subtitles ready");
     setPlaybackClock({ current: 0, duration: 0, playing: false });
+    setSeekPreviewSeconds(null);
+    seekPreviewSecondsRef.current = null;
     setIntroDBSegments({});
     setIntroDBLookupStatus("idle");
     skipDBLookupKeyRef.current = null;
@@ -1330,6 +1352,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     rememberedCandidateIdRef.current = null;
     currentAttemptManualRef.current = false;
     currentProvenCandidateRef.current = null;
+    transcodeSeekInFlightRef.current = false;
+    transcodeRecoveryCountRef.current = 0;
     resetPlaybackProof();
 
     const userId = auth.currentUser?.uid;
@@ -1645,12 +1669,11 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
   const seekTranscodedPlayback = useCallback(async (targetTime: number, resumeAfterSeek: boolean) => {
     const transcoded = activeTranscodeRef.current;
-    if (!transcoded) return false;
+    if (!transcoded || transcodeSeekInFlightRef.current) return false;
+    transcodeSeekInFlightRef.current = true;
 
     const video = videoRef.current;
     try { video?.pause(); } catch { /* The source reload still proceeds. */ }
-    setMode('loading');
-    modeRef.current = 'loading';
     setIsLoading(true);
     setIsMidstreamBuffering(false);
     setSourceValidated(false);
@@ -1673,8 +1696,6 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         streamUrl: `${response.streamUrl}${revisionSeparator}v=${Date.now()}`,
         startTime: targetTime
       });
-      setMode('playing');
-      modeRef.current = 'playing';
       resumeAppliedForSourceRef.current = true;
       candidateAdvanceLockRef.current = false;
       playAttemptedForSourceRef.current = false;
@@ -1685,8 +1706,29 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       recordCurrentSourceFailure("media-error");
       handleNextCandidate();
       return false;
+    } finally {
+      transcodeSeekInFlightRef.current = false;
     }
   }, [handleNextCandidate, recordCurrentSourceFailure, updateActiveTranscode]);
+
+  const seekWithinTranscodeBuffer = useCallback((targetTime: number, resumeAfterSeek: boolean) => {
+    const transcoded = activeTranscodeRef.current;
+    const video = videoRef.current;
+    if (!transcoded || !video) return false;
+
+    const localTarget = targetTime - transcoded.startTime;
+    if (localTarget < 0 || !Number.isFinite(localTarget)) return false;
+    for (let index = 0; index < video.seekable.length; index++) {
+      if (localTarget < video.seekable.start(index) || localTarget > video.seekable.end(index)) continue;
+      video.currentTime = localTarget;
+      setPlaybackClock(current => ({ ...current, current: targetTime }));
+      if (resumeAfterSeek && video.paused) {
+        void video.play().catch(() => setAutoplayBlocked(true));
+      }
+      return true;
+    }
+    return false;
+  }, []);
 
   const seekBy = useCallback((seconds: number) => {
     const video = videoRef.current;
@@ -1697,13 +1739,14 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     const targetTime = Math.min(duration, Math.max(0, previousTime + seconds));
     if (activeTranscodeRef.current) {
       if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
+      if (seekWithinTranscodeBuffer(targetTime, !video.paused)) return;
       void seekTranscodedPlayback(targetTime, !video.paused);
       return;
     }
     video.currentTime = targetTime;
     if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
     setPlaybackClock(current => ({ ...current, current: video.currentTime, duration }));
-  }, [activateSubtitleAssist, getEffectivePlaybackDuration, getEffectivePlaybackTime, seekTranscodedPlayback]);
+  }, [activateSubtitleAssist, getEffectivePlaybackDuration, getEffectivePlaybackTime, seekTranscodedPlayback, seekWithinTranscodeBuffer]);
 
   const seekTo = useCallback((seconds: number) => {
     const video = videoRef.current;
@@ -1714,13 +1757,28 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     const targetTime = Math.min(duration, Math.max(0, seconds));
     if (activeTranscodeRef.current) {
       if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
+      if (seekWithinTranscodeBuffer(targetTime, !video.paused)) return;
       void seekTranscodedPlayback(targetTime, !video.paused);
       return;
     }
     video.currentTime = targetTime;
     if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
     setPlaybackClock(current => ({ ...current, current: video.currentTime, duration }));
-  }, [activateSubtitleAssist, getEffectivePlaybackDuration, getEffectivePlaybackTime, seekTranscodedPlayback]);
+  }, [activateSubtitleAssist, getEffectivePlaybackDuration, getEffectivePlaybackTime, seekTranscodedPlayback, seekWithinTranscodeBuffer]);
+
+  const previewSeek = useCallback((seconds: number) => {
+    seekPreviewSecondsRef.current = seconds;
+    setSeekPreviewSeconds(seconds);
+  }, []);
+
+  const commitSeekPreview = useCallback(() => {
+    const target = seekPreviewSecondsRef.current;
+    if (target === null) return;
+    seekPreviewSecondsRef.current = null;
+    setSeekPreviewSeconds(null);
+    setPlaybackClock(current => ({ ...current, current: target }));
+    seekTo(target);
+  }, [seekTo]);
 
   const handleEpisodeEnded = useCallback(() => {
     if (!sourceValidatedRef.current) return;
@@ -2619,15 +2677,19 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           <div className="max-w-[1700px] mx-auto">
             <div className="flex items-center gap-2 sm:gap-4 mb-2.5 sm:mb-4">
               <span className="text-white text-[11px] sm:text-sm font-semibold tabular-nums min-w-[42px] sm:min-w-[70px] text-right">
-                {formatPlaybackTime(playbackClock.current)}
+                {formatPlaybackTime(seekPreviewSeconds ?? playbackClock.current)}
               </span>
               <input
                 type="range"
                 min={0}
                 max={Math.max(playbackClock.duration, 1)}
                 step={1}
-                value={Math.min(playbackClock.current, Math.max(playbackClock.duration, 1))}
-                onChange={event => seekTo(Number(event.currentTarget.value))}
+                value={Math.min(seekPreviewSeconds ?? playbackClock.current, Math.max(playbackClock.duration, 1))}
+                onChange={event => previewSeek(Number(event.currentTarget.value))}
+                onPointerUp={commitSeekPreview}
+                onTouchEnd={commitSeekPreview}
+                onKeyUp={commitSeekPreview}
+                onBlur={commitSeekPreview}
                 aria-label="Video progress"
                 className="flex-1 min-w-0 accent-orange-500 cursor-pointer"
               />

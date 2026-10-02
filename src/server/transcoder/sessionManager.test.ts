@@ -26,7 +26,7 @@ describe("Transcode Session Manager", () => {
 
   it("handles heartbeat updates and rejects invalid tokens", () => {
     expect(() => {
-      manager.recordHeartbeat("nonexistent", "badtoken", "127.0.0.1");
+      manager.recordHeartbeat("nonexistent", "badtoken");
     }).toThrow("not found or has expired");
   });
 });

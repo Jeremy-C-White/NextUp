@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseBestOpenSubtitlesFile, getOpenSubtitlesApiKey, isValidOpenSubtitlesApiKey, srtToWebVtt } from "./externalSubtitles";
+import { chooseBestOpenSubtitlesFile, getOpenSubtitlesApiKey, isValidOpenSubtitlesApiKey, shiftWebVttForPlaybackOffset, srtToWebVtt } from "./externalSubtitles";
 
 describe("external subtitles", () => {
   it("validates consumer keys without accepting shell punctuation", () => {
@@ -41,5 +41,16 @@ describe("external subtitles", () => {
     ], "Show.Name.S01E02.1080p.WEB-DL-GROUP.mkv");
 
     expect(best?.fileId).toBe("2");
+  });
+
+  it("aligns full-title captions with a restarted HLS timeline", () => {
+    const shifted = shiftWebVttForPlaybackOffset(
+      "WEBVTT\n\n00:01:35.000 --> 00:01:39.000\nOld cue\n\n00:01:42.500 --> 00:01:46.000\nVisible cue\n",
+      100
+    );
+
+    expect(shifted).not.toContain("Old cue");
+    expect(shifted).toContain("00:00:02.500 --> 00:00:06.000");
+    expect(shifted).toContain("Visible cue");
   });
 });

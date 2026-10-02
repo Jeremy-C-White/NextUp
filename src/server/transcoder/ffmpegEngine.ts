@@ -62,7 +62,10 @@ export function buildFFmpegArgs(options: {
       "-crf", "22",
       "-pix_fmt", "yuv420p",
       "-profile:v", "high",
-      "-level", "4.1"
+      "-level", "4.1",
+      // Apple recommends IDR frames every two seconds. This also keeps the
+      // first converted HLS segment from waiting on an unusually long GOP.
+      "-force_key_frames", "expr:gte(t,n_forced*2)"
     );
 
     if (willBurnSubtitle) {
@@ -93,7 +96,8 @@ export function buildFFmpegArgs(options: {
   args.push(
     "-f", "hls",
     "-hls_time", segmentDuration.toString(),
-    "-hls_list_size", "8", // Sliding window keeps last 8 segments in playlist
+    "-hls_list_size", "30", // roughly two minutes for pause/rewind on iPhone
+    "-hls_delete_threshold", "5",
     "-hls_flags", "delete_segments+temp_file" // Automatically prune older segments from disk
   );
 

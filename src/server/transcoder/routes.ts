@@ -7,10 +7,12 @@ import { TranscodeSessionManager } from "./sessionManager.js";
 import { extractSubtitleToWebVTT } from "./subtitleExtractor.js";
 import { TranscodeSessionConfig } from "./types.js";
 
-export function rewriteHlsPlaylistWithToken(content: string, token: string): string {
+export function rewriteHlsPlaylistWithToken(content: string, token: string, revision = ""): string {
   const appendToken = (uri: string) => {
     if (!/^(?:segment_\d+\.(?:ts|m4s)|init\.mp4)$/.test(uri)) return uri;
-    return `${uri}?token=${encodeURIComponent(token)}`;
+    const query = new URLSearchParams({ token });
+    if (revision) query.set("v", revision);
+    return `${uri}?${query.toString()}`;
   };
 
   return content
@@ -112,12 +114,11 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
 
   // 3. Serve HLS Playlist (index.m3u8)
   router.get("/session/:sessionId/index.m3u8", (req: Request, res: Response) => {
-    const clientIp = getClientIp(req);
     const sessionId = getParam(req.params.sessionId);
     const token = (req.query.token as string) || (req.headers["x-session-token"] as string);
 
     try {
-      const session = sessionManager.getSession(sessionId, token, clientIp);
+      const session = sessionManager.getSession(sessionId, token);
       const playlistPath = path.join(session.workDir, "index.m3u8");
 
       if (!fs.existsSync(playlistPath)) {
@@ -127,7 +128,7 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
       // Read playlist and rewrite segment paths to include session token
       let content = fs.readFileSync(playlistPath, "utf8");
       // Append the session token to media segments and the fMP4 init URI.
-      content = rewriteHlsPlaylistWithToken(content, token);
+      content = rewriteHlsPlaylistWithToken(content, token, String(req.query.v || ""));
 
       res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -140,7 +141,6 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
 
   // 4. Serve Segment Files (.ts, .m4s, init.mp4)
   router.get("/session/:sessionId/:segmentFile", (req: Request, res: Response) => {
-    const clientIp = getClientIp(req);
     const sessionId = getParam(req.params.sessionId);
     const segmentFile = getParam(req.params.segmentFile);
     const token = (req.query.token as string) || (req.headers["x-session-token"] as string);
@@ -151,7 +151,7 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
     }
 
     try {
-      const session = sessionManager.getSession(sessionId, token, clientIp);
+      const session = sessionManager.getSession(sessionId, token);
       const filePath = path.join(session.workDir, segmentFile);
 
       if (!fs.existsSync(filePath)) {
@@ -164,7 +164,7 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
       else if (ext === ".m4s" || ext === ".mp4") contentType = "video/mp4";
 
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Cache-Control", "public, max-age=60");
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
       res.setHeader("Access-Control-Allow-Origin", "*");
 
       const stream = fs.createReadStream(filePath);
@@ -176,7 +176,6 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
 
   // 5. WebVTT Subtitle Extraction
   router.get("/session/:sessionId/subtitles/:streamIndex.vtt", async (req: Request, res: Response) => {
-    const clientIp = getClientIp(req);
     const sessionId = getParam(req.params.sessionId);
     const streamIndex = getParam(req.params.streamIndex);
     const token = (req.query.token as string) || (req.headers["x-session-token"] as string);
@@ -187,7 +186,7 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
     }
 
     try {
-      const session = sessionManager.getSession(sessionId, token, clientIp);
+      const session = sessionManager.getSession(sessionId, token);
       const vttPath = path.join(session.workDir, `subtitle_${idxNum}.vtt`);
 
       await extractSubtitleToWebVTT(session.config.sourceUrl, idxNum, vttPath);
@@ -204,12 +203,11 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
 
   // 6. Client Heartbeat
   router.post("/session/:sessionId/heartbeat", (req: Request, res: Response) => {
-    const clientIp = getClientIp(req);
     const sessionId = getParam(req.params.sessionId);
     const { token } = req.body || {};
 
     try {
-      sessionManager.recordHeartbeat(sessionId, token, clientIp);
+      sessionManager.recordHeartbeat(sessionId, token);
       res.json({ ok: true });
     } catch (err: any) {
       res.status(403).json({ error: err.message || "Heartbeat failed" });
@@ -218,7 +216,6 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
 
   // 7. Restart-on-Seek
   router.post("/session/:sessionId/seek", async (req: Request, res: Response) => {
-    const clientIp = getClientIp(req);
     const sessionId = getParam(req.params.sessionId);
     const { token, seekTime } = req.body || {};
 
@@ -227,7 +224,7 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
     }
 
     try {
-      const updatedSession = await sessionManager.seekSession(sessionId, token, clientIp, seekTime);
+      const updatedSession = await sessionManager.seekSession(sessionId, token, seekTime);
       res.json({
         ok: true,
         sessionId: updatedSession.id,
@@ -241,12 +238,11 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
 
   // 8. Delete / Close Session
   router.delete("/session/:sessionId", async (req: Request, res: Response) => {
-    const clientIp = getClientIp(req);
     const sessionId = getParam(req.params.sessionId);
     const token = (req.query.token as string) || req.body?.token;
 
     try {
-      await sessionManager.destroySession(sessionId, token, clientIp);
+      await sessionManager.destroySession(sessionId, token);
       res.json({ ok: true, message: "Session terminated" });
     } catch (err: any) {
       res.status(403).json({ error: err.message || "Failed to terminate session" });

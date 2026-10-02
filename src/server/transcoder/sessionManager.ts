@@ -17,8 +17,8 @@ import {
 } from "./ffmpegEngine.js";
 
 const DEFAULT_BASE_DIR = path.join(os.tmpdir(), "nextup_transcoder");
-const INACTIVITY_TIMEOUT_MS = 45000; // 45 seconds without heartbeat / activity terminates session
-const MAX_SESSION_DISK_BYTES = 250 * 1024 * 1024; // 250MB disk limit per session
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // tolerate iOS lock-screen and background timer suspension
+const MAX_SESSION_DISK_BYTES = 2 * 1024 * 1024 * 1024; // emergency ceiling; FFmpeg normally prunes its HLS window
 
 export interface ActiveSession {
   id: string;
@@ -76,7 +76,7 @@ export class TranscodeSessionManager {
     }
 
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    const token = generateSessionToken(sessionId, clientIp);
+    const token = generateSessionToken(sessionId);
     const workDir = path.join(this.baseDir, sessionId);
 
     this.limiter.trackSessionStart(clientIp);
@@ -124,13 +124,13 @@ export class TranscodeSessionManager {
   /**
    * Validates access and returns the active session.
    */
-  public getSession(sessionId: string, token: string, clientIp: string): ActiveSession {
+  public getSession(sessionId: string, token: string): ActiveSession {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error("Transcode session not found or has expired");
     }
 
-    const verification = verifySessionToken(sessionId, token, clientIp);
+    const verification = verifySessionToken(sessionId, token);
     if (!verification.valid) {
       throw new Error(verification.reason || "Unauthorized transcode session token");
     }
@@ -143,8 +143,8 @@ export class TranscodeSessionManager {
   /**
    * Handles client heartbeat pings.
    */
-  public recordHeartbeat(sessionId: string, token: string, clientIp: string): boolean {
-    const session = this.getSession(sessionId, token, clientIp);
+  public recordHeartbeat(sessionId: string, token: string): boolean {
+    const session = this.getSession(sessionId, token);
     session.lastHeartbeat = Date.now();
     return true;
   }
@@ -156,10 +156,9 @@ export class TranscodeSessionManager {
   public async seekSession(
     sessionId: string,
     token: string,
-    clientIp: string,
     seekTimeSeconds: number
   ): Promise<ActiveSession> {
-    const session = this.getSession(sessionId, token, clientIp);
+    const session = this.getSession(sessionId, token);
 
     // Stop existing FFmpeg child process
     await session.ffmpeg.stop();
@@ -197,12 +196,12 @@ export class TranscodeSessionManager {
   /**
    * Terminates and cleans up a session immediately.
    */
-  public async destroySession(sessionId: string, token?: string, clientIp?: string): Promise<void> {
+  public async destroySession(sessionId: string, token?: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
-    if (token && clientIp) {
-      const verification = verifySessionToken(sessionId, token, clientIp);
+    if (token) {
+      const verification = verifySessionToken(sessionId, token);
       if (!verification.valid) {
         throw new Error("Unauthorized session deletion");
       }
@@ -248,7 +247,8 @@ export class TranscodeSessionManager {
           if (fs.existsSync(session.workDir)) {
             const size = this.getDirectorySize(session.workDir);
             if (size > MAX_SESSION_DISK_BYTES) {
-              this.pruneOldSegments(session.workDir);
+              console.warn(`[Transcoder Watchdog] Session ${id} exceeded the emergency disk ceiling. Stopping it.`);
+              await this.destroySession(id).catch(() => {});
             }
           }
         } catch {}
@@ -267,23 +267,6 @@ export class TranscodeSessionManager {
       }
     } catch {}
     return total;
-  }
-
-  private pruneOldSegments(dir: string): void {
-    try {
-      const files = fs.readdirSync(dir)
-        .filter(f => f.endsWith(".ts") || f.endsWith(".m4s"))
-        .map(f => ({ name: f, time: fs.statSync(path.join(dir, f)).mtimeMs }))
-        .sort((a, b) => a.time - b.time);
-
-      // Keep only 6 latest segments if disk quota exceeded
-      if (files.length > 6) {
-        const toDelete = files.slice(0, files.length - 6);
-        for (const item of toDelete) {
-          fs.rmSync(path.join(dir, item.name), { force: true });
-        }
-      }
-    } catch {}
   }
 
   public getSessionCount(): number {

@@ -107,20 +107,21 @@ export function validateSourceUrl(urlStr: string, allowLocalhostForTesting = fal
 /**
  * Generates an HMAC signature for a session.
  */
-export function generateSessionToken(sessionId: string, clientIp: string, secret = DEFAULT_SECRET): string {
+export function generateSessionToken(sessionId: string, secret = DEFAULT_SECRET): string {
   const timestamp = Date.now();
-  const payload = `${sessionId}:${clientIp}:${timestamp}`;
+  const payload = `${sessionId}:${timestamp}`;
   const hmac = crypto.createHmac("sha256", secret).update(payload).digest("hex");
   return `${timestamp}.${hmac}`;
 }
 
 /**
- * Verifies that a session token matches the sessionId and clientIp, and is not expired.
+ * Verifies that a session token matches the sessionId and is not expired.
+ * The token deliberately is not tied to an IP address: an iPhone may switch
+ * between Wi-Fi and cellular or hand HLS requests to an AirPlay device.
  */
 export function verifySessionToken(
   sessionId: string,
   token: string,
-  clientIp: string,
   secret = DEFAULT_SECRET
 ): { valid: boolean; reason?: string } {
   if (!token || typeof token !== "string") {
@@ -143,7 +144,7 @@ export function verifySessionToken(
     return { valid: false, reason: "Token expired" };
   }
 
-  const expectedPayload = `${sessionId}:${clientIp}:${timestamp}`;
+  const expectedPayload = `${sessionId}:${timestamp}`;
   const expectedSignature = crypto.createHmac("sha256", secret).update(expectedPayload).digest("hex");
 
   // Constant-time comparison

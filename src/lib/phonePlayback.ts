@@ -55,6 +55,23 @@ const isMkvCandidate = (candidate: PlaybackCandidate): boolean => {
   }
 };
 
+const getInternalMkvCandidateScore = (candidate: PlaybackCandidate): number => {
+  const videoCodec = (candidate.videoCodec || "").toLowerCase();
+  const description = `${candidate.title || ""} ${candidate.quality || ""}`.toLowerCase();
+  let score = getPhoneCandidateScore(candidate);
+
+  // Prefer streams the server can normally remux while leaving expensive
+  // conversions available for manual selection and eventual VLC fallback.
+  if (/^(?:h264|avc|x264)$/.test(videoCodec)) score += 1_500;
+  else if (/^(?:hevc|h265|x265)$/.test(videoCodec)) score += 1_200;
+  else if (/^(?:av1|vp9)$/.test(videoCodec)) score -= 3_000;
+
+  if (/\b(?:hi10p?|10[ ._-]?bit)\b/.test(description) && /^(?:h264|avc|x264)$/.test(videoCodec)) {
+    score -= 5_000;
+  }
+  return score;
+};
+
 export type ExternalPlayerPlatform = "ios" | "android" | "desktop";
 
 export function getExternalPlayerLaunchUrl(
@@ -81,7 +98,10 @@ export function selectVlcFallbackCandidates(
       (candidate.container === "external" || candidate.playbackSupport === "external") &&
       isMkvCandidate(candidate)
     )
-    .slice(0, maximum);
+    .map((candidate, originalIndex) => ({ candidate, originalIndex, score: getInternalMkvCandidateScore(candidate) }))
+    .sort((first, second) => second.score - first.score || first.originalIndex - second.originalIndex)
+    .slice(0, maximum)
+    .map(item => item.candidate);
 }
 
 /**
