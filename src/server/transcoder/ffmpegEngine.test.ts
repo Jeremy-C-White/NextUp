@@ -45,6 +45,7 @@ describe("FFmpeg Engine Argument Builder", () => {
     expect(iIndex).toBeGreaterThan(-1);
     expect(ssIndex).toBeLessThan(iIndex);
     expect(args[ssIndex + 1]).toBe("345.50");
+    expect(args.indexOf("-re")).toBeLessThan(iIndex);
   });
 
   it("copies video stream and transcodes DTS to AAC stereo when video is safe", () => {
@@ -111,6 +112,37 @@ describe("FFmpeg Engine Argument Builder", () => {
     expect(args).toContain("fmp4");
     expect(args).toContain("-hls_fmp4_init_filename");
     expect(args).toContain("init.mp4");
+    expect(args[args.indexOf("-tag:v") + 1]).toBe("hvc1");
+  });
+
+  it("prefers an English audio track and safely handles video-only files", () => {
+    const multiAudioProbe: MediaProbeResult = {
+      ...baseProbe,
+      audioStreams: [
+        { index: 0, streamIndex: 1, codec: "aac", channels: 2, language: "ita", isDefault: true },
+        { index: 1, streamIndex: 2, codec: "dts", channels: 6, language: "eng", isDefault: false },
+      ],
+    };
+    const multiAudioArgs = buildFFmpegArgs({
+      sourceUrl: multiAudioProbe.sourceUrl,
+      probe: multiAudioProbe,
+      config: { sourceUrl: multiAudioProbe.sourceUrl },
+      workDir: "/tmp/test",
+      segmentType: "mpegts",
+    });
+    const mappedStreams = multiAudioArgs
+      .map((arg, index) => arg === "-map" ? multiAudioArgs[index + 1] : null)
+      .filter(Boolean);
+    expect(mappedStreams).toContain("0:2");
+
+    const videoOnlyArgs = buildFFmpegArgs({
+      sourceUrl: baseProbe.sourceUrl,
+      probe: { ...baseProbe, audioStreams: [] },
+      config: { sourceUrl: baseProbe.sourceUrl },
+      workDir: "/tmp/test",
+      segmentType: "mpegts",
+    });
+    expect(videoOnlyArgs).toContain("-an");
   });
 
   it("applies subtitle overlay filter when subtitle burning is requested", () => {

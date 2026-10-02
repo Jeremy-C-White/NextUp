@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   isDomainAllowed,
   isPrivateOrReservedHost,
@@ -9,6 +9,8 @@ import {
 } from "./security.js";
 
 describe("Transcoder Security Module", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   describe("Domain & SSRF Validation", () => {
     it("allows official debrid streaming provider domains", () => {
       expect(isDomainAllowed("real-debrid.com")).toBe(true);
@@ -22,6 +24,12 @@ describe("Transcoder Security Module", () => {
       expect(isDomainAllowed("evil-hacker.com")).toBe(false);
       expect(isDomainAllowed("youtube.com")).toBe(false);
       expect(isDomainAllowed("example.com")).toBe(false);
+    });
+
+    it("allows the configured AIOStreams host without opening arbitrary domains", () => {
+      vi.stubEnv("VITE_AIOSTREAMS_BASE_URL", "https://streams.example.net/stremio/user/manifest.json");
+      expect(isDomainAllowed("streams.example.net")).toBe(true);
+      expect(isDomainAllowed("unrelated.example.net")).toBe(false);
     });
 
     it("detects and blocks private/loopback/cloud metadata IP addresses", () => {

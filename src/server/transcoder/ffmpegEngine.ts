@@ -35,6 +35,10 @@ export function buildFFmpegArgs(options: {
     args.push("-ss", startTime.toFixed(2));
   }
 
+  // Generate HLS at playback speed. Without this, a stream-copy session can
+  // race far ahead of Safari and delete segments before the phone requests them.
+  args.push("-re");
+
   // Input source
   args.push("-i", sourceUrl);
 
@@ -49,6 +53,7 @@ export function buildFFmpegArgs(options: {
 
   if (canCopy) {
     args.push("-c:v", "copy");
+    if (videoStream?.isHevc) args.push("-tag:v", "hvc1");
   } else {
     // Transcode to standard H.264 8-bit baseline/high profile for universal Safari compatibility
     args.push(
@@ -68,16 +73,20 @@ export function buildFFmpegArgs(options: {
 
   // Audio track selection & AAC conversion
   const selectedAudio = probe.audioStreams.find(a => a.index === config.audioTrackIndex)
+    || probe.audioStreams.find(a => /^(?:en(?:[-_].*)?|eng|english)$/i.test(a.language || ""))
+    || probe.audioStreams.find(a => a.isDefault)
     || probe.audioStreams[0];
-  const audioStreamIndex = selectedAudio ? selectedAudio.streamIndex : 1;
-
-  args.push(
-    "-map", `0:${audioStreamIndex}`,
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-ac", "2",
-    "-ar", "48000"
-  );
+  if (selectedAudio) {
+    args.push(
+      "-map", `0:${selectedAudio.streamIndex}`,
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-ac", "2",
+      "-ar", "48000"
+    );
+  } else {
+    args.push("-an");
+  }
 
   // HLS Packaging
   const segmentDuration = 4; // 4 seconds per segment
@@ -157,7 +166,7 @@ export function spawnFFmpegSession(options: {
     }
   };
 
-  const waitUntilReady = (timeoutMs = 15000): Promise<void> => {
+  const waitUntilReady = (timeoutMs = 25000): Promise<void> => {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
 

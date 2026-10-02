@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-const DEFAULT_SECRET = process.env.TRANSCODER_SECRET || "nextup-transcode-security-key-2026";
+const DEFAULT_SECRET = process.env.TRANSCODER_SECRET || crypto.randomBytes(32).toString("hex");
 const MAX_CONCURRENT_PER_IP = 2;
 const MAX_CONCURRENT_SERVER = 4;
 const TOKEN_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -20,7 +20,18 @@ export function getAllowedDomains(): string[] {
   const custom = process.env.ALLOWED_STREAM_DOMAINS
     ? process.env.ALLOWED_STREAM_DOMAINS.split(",").map(d => d.trim().toLowerCase()).filter(Boolean)
     : [];
-  return [...BASE_ALLOWED_DOMAINS, ...custom];
+  const configuredProviderDomains = [
+    process.env.AIOSTREAMS_BASE_URL,
+    process.env.VITE_AIOSTREAMS_BASE_URL,
+  ].flatMap(value => {
+    if (!value) return [];
+    try {
+      return [new URL(value).hostname.toLowerCase()];
+    } catch {
+      return [];
+    }
+  });
+  return [...new Set([...BASE_ALLOWED_DOMAINS, ...configuredProviderDomains, ...custom])];
 }
 
 /**

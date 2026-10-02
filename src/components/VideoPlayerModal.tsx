@@ -27,6 +27,7 @@ import {
   selectPhonePlaybackCandidates,
   selectVlcFallbackCandidates
 } from "../lib/phonePlayback";
+import { TranscoderClient, TranscodeSessionResponse } from "../lib/transcoderClient";
 import {
   findActiveIntroDBSegment,
   getIntroDBSegments,
@@ -115,7 +116,7 @@ function StreamBadges({ cand }: { cand: PlaybackCandidate }) {
       )}
       {cand.playbackSupport === "external" ? (
         <span className="bg-orange-500/15 text-orange-200 font-bold text-[10px] px-2 py-0.5 rounded border border-orange-500/25">
-          VLC
+          MKV
         </span>
       ) : cand.playbackSupport === "probe" ? (
         <span className="bg-amber-500/15 text-amber-200 font-bold text-[10px] px-2 py-0.5 rounded border border-amber-500/25">
@@ -244,6 +245,12 @@ interface VideoPlayerModalProps {
 
 type PlayerMode = 'loading' | 'playing' | 'vlc_fallback' | 'error';
 
+interface ActiveTranscodePlayback extends TranscodeSessionResponse {
+  candidate: PlaybackCandidate;
+  candidateIndex: number;
+  startTime: number;
+}
+
 interface WebOSAudioTrack extends AudioTrackDescriptor {
   enabled: boolean;
 }
@@ -269,6 +276,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const [candidates, setCandidates] = useState<PlaybackCandidate[]>([]);
   const [vlcCandidates, setVlcCandidates] = useState<PlaybackCandidate[]>([]);
   const [candidateIndex, setCandidateIndex] = useState(0);
+  const [activeTranscode, setActiveTranscode] = useState<ActiveTranscodePlayback | null>(null);
   
   const playableCandidates = candidates.filter(c =>
     c.container === 'web-compatible' || c.container === 'web-probe'
@@ -338,6 +346,10 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     seeking: boolean;
     saved: boolean;
   }>({ candidateId: null, baselineSeconds: null, seeking: false, saved: false });
+  const transcoderClientRef = useRef(new TranscoderClient());
+  const activeTranscodeRef = useRef<ActiveTranscodePlayback | null>(null);
+  const transcodeGenerationRef = useRef(0);
+  const transcodeSeekAutoplayRef = useRef(false);
 
   // Mutable refs to eliminate stale closure issues in timers & event handlers
   const playableCandidatesRef = useRef<PlaybackCandidate[]>([]);
@@ -354,6 +366,40 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   useEffect(() => { candidateIndexRef.current = candidateIndex; }, [candidateIndex]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
+  const updateActiveTranscode = useCallback((playback: ActiveTranscodePlayback | null) => {
+    activeTranscodeRef.current = playback;
+    setActiveTranscode(playback);
+  }, []);
+
+  const getCurrentSourceContext = useCallback(() => {
+    const transcoded = activeTranscodeRef.current;
+    if (transcoded) {
+      return {
+        candidate: transcoded.candidate,
+        index: transcoded.candidateIndex,
+        total: vlcCandidatesRef.current.length
+      };
+    }
+    return {
+      candidate: playableCandidatesRef.current[candidateIndexRef.current],
+      index: candidateIndexRef.current,
+      total: playableCandidatesRef.current.length
+    };
+  }, []);
+
+  const getEffectivePlaybackTime = useCallback((video: HTMLVideoElement) => {
+    const transcoded = activeTranscodeRef.current;
+    return transcoded ? transcoded.startTime + (video.currentTime || 0) : video.currentTime;
+  }, []);
+
+  const getEffectivePlaybackDuration = useCallback((video: HTMLVideoElement) => {
+    const transcoded = activeTranscodeRef.current;
+    if (transcoded?.durationSeconds && Number.isFinite(transcoded.durationSeconds)) {
+      return transcoded.durationSeconds;
+    }
+    return video.duration;
+  }, []);
+
   const resetPlaybackProof = useCallback((candidateId: string | null = null) => {
     playbackProofRef.current = {
       candidateId,
@@ -364,13 +410,11 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   }, []);
 
   const recordCurrentSourceFailure = useCallback((reason: SourceFailureReason, observedMs?: number) => {
-    const currentIndex = candidateIndexRef.current;
-    const currentSources = playableCandidatesRef.current;
-    const candidate = currentSources[currentIndex];
+    const { candidate, index: currentIndex, total } = getCurrentSourceContext();
     const details = {
       reason,
       observedMs: observedMs === undefined ? undefined : Math.round(observedMs),
-      ...getPlaybackSourceDiagnosticFields(candidate, currentIndex, currentSources.length)
+      ...getPlaybackSourceDiagnosticFields(candidate, currentIndex, total)
     };
 
     if (currentAttemptManualRef.current) {
@@ -413,11 +457,11 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     } catch {
       console.info(formatPlaybackDiagnostic("penalty skipped", { ...details, why: "storage-unavailable" }));
     }
-  }, []);
+  }, [getCurrentSourceContext]);
 
   const confirmCurrentSourceIfProven = useCallback((video: HTMLVideoElement) => {
     if (!sourceValidatedRef.current || video.paused) return;
-    const candidate = playableCandidatesRef.current[candidateIndexRef.current];
+    const { candidate, index, total } = getCurrentSourceContext();
     const userId = auth.currentUser?.uid;
     const mediaKey = sourceMemoryMediaKeyRef.current;
     if (!candidate?.fingerprint || !userId || !mediaKey) return;
@@ -448,7 +492,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       if (episodeSaved || showSaved) {
         console.info(formatPlaybackDiagnostic("source saved as preferred", {
           scope: episodeSaved && showSaved ? "episode-and-show" : episodeSaved ? "episode" : "show",
-          ...getPlaybackSourceDiagnosticFields(candidate, candidateIndexRef.current, playableCandidatesRef.current.length)
+          ...getPlaybackSourceDiagnosticFields(candidate, index, total)
         }));
       }
     } catch {
@@ -456,7 +500,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     }
     proof.saved = true;
     currentProvenCandidateRef.current = candidate;
-  }, []);
+  }, [getCurrentSourceContext]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -474,8 +518,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     const video = videoRef.current;
     if (!userId || !video || !sourceValidatedRef.current) return;
 
-    const position = video.currentTime;
-    const duration = video.duration;
+    const position = getEffectivePlaybackTime(video);
+    const duration = getEffectivePlaybackDuration(video);
     if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0 || position < 0) return;
 
     if (duration - position <= 1) {
@@ -502,7 +546,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     } catch {
       // The player still works when private storage is unavailable.
     }
-  }, [request.episodeId, request.showId]);
+  }, [getEffectivePlaybackDuration, getEffectivePlaybackTime, request.episodeId, request.showId]);
 
   const clearCurrentPlaybackProgress = useCallback(() => {
     const userId = auth.currentUser?.uid;
@@ -520,6 +564,20 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const applySavedProgress = useCallback((video: HTMLVideoElement) => {
     if (resumeAppliedForSourceRef.current) return;
     resumeAppliedForSourceRef.current = true;
+
+    const transcoded = activeTranscodeRef.current;
+    if (transcoded) {
+      sameSessionFailoverPositionRef.current = null;
+      setPlaybackClock(current => ({
+        ...current,
+        current: transcoded.startTime,
+        duration: transcoded.durationSeconds
+      }));
+      if (transcoded.startTime > 0) {
+        setStatusText(`Resuming from ${formatPlaybackTime(transcoded.startTime)}...`);
+      }
+      return;
+    }
 
     const failoverPosition = sameSessionFailoverPositionRef.current;
     sameSessionFailoverPositionRef.current = null;
@@ -556,11 +614,12 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   }, []);
 
   const rememberSameSessionFailoverPosition = useCallback(() => {
-    const position = videoRef.current?.currentTime;
+    const video = videoRef.current;
+    const position = video ? getEffectivePlaybackTime(video) : undefined;
     sameSessionFailoverPositionRef.current = Number.isFinite(position) && (position || 0) > 0
       ? Number(position)
       : null;
-  }, []);
+  }, [getEffectivePlaybackTime]);
 
   const restoreSubtitleModesIfIdle = useCallback(() => {
     if (subtitleRewindActiveRef.current || subtitleMuteActiveRef.current) return;
@@ -653,7 +712,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
   useEffect(() => () => resetSubtitleAssist(), [resetSubtitleAssist]);
 
-  const currentStream = playableCandidates[candidateIndex]?.url;
+  const currentStream = activeTranscode?.streamUrl || playableCandidates[candidateIndex]?.url;
 
   const openSourceSelector = useCallback(() => {
     setShowSourceSelector(true);
@@ -708,7 +767,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       return;
     }
 
-    const candidate = playableCandidatesRef.current[candidateIndexRef.current];
+    const { candidate } = getCurrentSourceContext();
     const lookupKey = [imdbId, request.season, request.number, candidate?.title || currentStream].join(":");
     if (externalSubtitleLookupKeyRef.current === lookupKey) {
       if (externalSubtitleLookupStateRef.current === "loading" && subtitleRewindActiveRef.current) {
@@ -806,7 +865,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       window.clearTimeout(timeout);
       if (externalSubtitleAbortRef.current === controller) externalSubtitleAbortRef.current = null;
     });
-  }, [currentStream, request.isMovie, request.number, request.season, restoreSubtitleModesIfIdle]);
+  }, [currentStream, getCurrentSourceContext, request.isMovie, request.number, request.season, restoreSubtitleModesIfIdle]);
 
   const activateSubtitleAssist = useCallback((reason: "rewind" | "mute") => {
     const video = videoRef.current;
@@ -879,14 +938,24 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     return clearExternalSubtitle;
   }, [clearExternalSubtitle, currentStream]);
 
+  const stopActiveTranscode = useCallback(() => {
+    const current = activeTranscodeRef.current;
+    updateActiveTranscode(null);
+    if (current) {
+      void transcoderClientRef.current.stop(current.sessionId, current.token);
+    }
+  }, [updateActiveTranscode]);
+
   const selectCandidate = (index: number) => {
     const selected = playableCandidates[index];
     if (!selected) return;
 
-    currentAttemptManualRef.current = true;
-    resetPlaybackProof(selected.id);
     rememberSameSessionFailoverPosition();
     persistPlaybackProgress(true);
+    transcodeGenerationRef.current += 1;
+    stopActiveTranscode();
+    currentAttemptManualRef.current = true;
+    resetPlaybackProof(selected.id);
     resetSubtitleAssist();
     const isSameSource = index === candidateIndexRef.current;
     candidateAdvanceLockRef.current = false;
@@ -929,6 +998,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
   const showVlcFallback = useCallback((message: string) => {
     if (vlcCandidatesRef.current.length === 0) return false;
+    transcodeGenerationRef.current += 1;
+    stopActiveTranscode();
     setShowAllVlcSources(false);
     setMode('vlc_fallback');
     modeRef.current = 'vlc_fallback';
@@ -937,7 +1008,107 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setIsMidstreamBuffering(false);
     setAutoplayBlocked(false);
     return true;
-  }, []);
+  }, [stopActiveTranscode]);
+
+  const startInternalMkvFallback = useCallback(async (startIndex = 0, manual = false) => {
+    const internalCandidates = vlcCandidatesRef.current;
+    if (internalCandidates.length === 0 || startIndex >= internalCandidates.length) {
+      showVlcFallback("NextUp could not prepare another MKV source inside the app.");
+      return false;
+    }
+
+    const generation = ++transcodeGenerationRef.current;
+    stopActiveTranscode();
+    resetSubtitleAssist();
+    setShowSourceSelector(false);
+    setMode('loading');
+    modeRef.current = 'loading';
+    setPlaybackError(null);
+    setSourceValidated(false);
+    sourceValidatedRef.current = false;
+    setAutoplayBlocked(false);
+    setIsLoading(true);
+    setIsMidstreamBuffering(false);
+
+    const client = transcoderClientRef.current;
+    setStatusText("Preparing secure in-app MKV playback...");
+    if (!await client.isHealthy()) {
+      if (generation !== transcodeGenerationRef.current) return false;
+      showVlcFallback("The in-app MKV service is unavailable, so VLC remains available as a backup.");
+      return false;
+    }
+
+    for (let index = startIndex; index < internalCandidates.length; index++) {
+      if (generation !== transcodeGenerationRef.current) return false;
+      const candidate = internalCandidates[index];
+      const requestedStart = Math.max(
+        0,
+        sameSessionFailoverPositionRef.current ?? resumePositionRef.current ?? 0
+      );
+      setStatusText(`Preparing MKV source ${index + 1} of ${internalCandidates.length} inside NextUp...`);
+
+      try {
+        const session = await client.startSession({
+          sourceUrl: candidate.url,
+          startTime: requestedStart
+        });
+
+        if (generation !== transcodeGenerationRef.current) {
+          void client.stop(session.sessionId, session.token);
+          return false;
+        }
+        if (!Number.isFinite(session.durationSeconds) || session.durationSeconds <= 45) {
+          void client.stop(session.sessionId, session.token);
+          continue;
+        }
+
+        const startTime = Math.min(requestedStart, Math.max(0, session.durationSeconds - 1));
+        const revisionSeparator = session.streamUrl.includes("?") ? "&" : "?";
+        const playback: ActiveTranscodePlayback = {
+          ...session,
+          streamUrl: `${session.streamUrl}${revisionSeparator}v=${Date.now()}`,
+          candidate,
+          candidateIndex: index,
+          startTime
+        };
+        updateActiveTranscode(playback);
+        currentAttemptManualRef.current = manual;
+        resetPlaybackProof(candidate.id);
+        playAttemptedForSourceRef.current = false;
+        resumeAppliedForSourceRef.current = false;
+        candidateAdvanceLockRef.current = false;
+        setMode('playing');
+        modeRef.current = 'playing';
+        setStatusText(session.isCopied
+          ? "MKV prepared — video preserved at original quality."
+          : "MKV converted for iPhone playback."
+        );
+        console.info(formatPlaybackDiagnostic("in-app MKV source prepared", {
+          mode: session.isCopied ? "video-copy" : "video-transcode",
+          videoCodec: session.videoCodec,
+          ...getPlaybackSourceDiagnosticFields(candidate, index, internalCandidates.length)
+        }));
+        return true;
+      } catch (error) {
+        console.info(formatPlaybackDiagnostic("in-app MKV source unavailable", {
+          source: `${index + 1}/${internalCandidates.length}`,
+          reason: error instanceof Error ? error.message.replace(/https?:\/\/\S+/gi, "[stream]") : "unknown"
+        }));
+      }
+    }
+
+    if (generation === transcodeGenerationRef.current) {
+      showVlcFallback("NextUp tried every internal MKV option, but the server could not prepare one.");
+    }
+    return false;
+  }, [resetPlaybackProof, resetSubtitleAssist, showVlcFallback, stopActiveTranscode, updateActiveTranscode]);
+
+  const selectInternalCandidate = useCallback((index: number) => {
+    if (!vlcCandidatesRef.current[index]) return;
+    rememberSameSessionFailoverPosition();
+    persistPlaybackProgress(true);
+    void startInternalMkvFallback(index, true);
+  }, [persistPlaybackProgress, rememberSameSessionFailoverPosition, startInternalMkvFallback]);
 
 
   const handleNextCandidate = useCallback((manual = false) => {
@@ -964,6 +1135,14 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setSourceValidated(false);
     setAutoplayBlocked(false);
 
+    const activeInternalSource = activeTranscodeRef.current;
+    if (activeInternalSource) {
+      const nextInternalIndex = activeInternalSource.candidateIndex + 1;
+      stopActiveTranscode();
+      void startInternalMkvFallback(nextInternalIndex, manual);
+      return;
+    }
+
     const currentSources = playableCandidatesRef.current;
     const currentIndex = candidateIndexRef.current;
 
@@ -981,6 +1160,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       resetAttemptState();
       setAutoplayBlocked(false);
       setStatusText(`Checking source ${nextIdx + 1} of ${currentSources.length}...`);
+    } else if (vlcCandidatesRef.current.length > 0) {
+      void startInternalMkvFallback(0, manual);
     } else if (manual && currentSources.length > 0) {
       const nextIdx = currentSources.length > 1 ? 0 : currentIndex;
       currentAttemptManualRef.current = true;
@@ -1003,13 +1184,12 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         }, 0);
       }
     } else {
-      if (showVlcFallback("Every phone-ready source was tried before offering these MKV files.")) return;
       setMode('error');
       modeRef.current = 'error';
       setPlaybackError("Every phone-ready source was tried. Please refresh the source search.");
       setIsLoading(false);
     }
-  }, [persistPlaybackProgress, rememberSameSessionFailoverPosition, resetPlaybackProof, resetSubtitleAssist, showVlcFallback]);
+  }, [persistPlaybackProgress, rememberSameSessionFailoverPosition, resetPlaybackProof, resetSubtitleAssist, startInternalMkvFallback, stopActiveTranscode]);
 
   /**
    * Real-Debrid can occasionally return a short placeholder video stating that
@@ -1017,7 +1197,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
    * proves it is a real movie or episode, then reveal it to the user.
    */
   const validateCurrentSource = useCallback((video: HTMLVideoElement): 'valid' | 'invalid' | 'pending' => {
-    const duration = video.duration;
+    const duration = getEffectivePlaybackDuration(video);
 
     if (!Number.isFinite(duration) || duration <= 0) {
       return 'pending';
@@ -1048,11 +1228,11 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     }
 
     return 'valid';
-  }, [handleNextCandidate, isIOS, recordCurrentSourceFailure]);
+  }, [getEffectivePlaybackDuration, handleNextCandidate, isIOS, recordCurrentSourceFailure]);
 
   const ensureEnglishAudio = useCallback((video: HTMLVideoElement): boolean => {
     const audioTracks = (video as HTMLVideoElement & { audioTracks?: WebOSAudioTrackList }).audioTracks;
-    const candidate = playableCandidatesRef.current[candidateIndexRef.current];
+    const { candidate } = getCurrentSourceContext();
 
     if (!audioTracks || audioTracks.length === 0) {
       setAudioStatus(candidate?.audioLanguage === "english" ? "English audio" : "English audio preferred");
@@ -1093,12 +1273,14 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
     setAudioStatus(candidate?.audioLanguage === "english" ? "English audio" : "English audio preferred");
     return true;
-  }, [handleNextCandidate]);
+  }, [getCurrentSourceContext, handleNextCandidate]);
 
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
 
+    transcodeGenerationRef.current += 1;
+    stopActiveTranscode();
     setMode('loading');
     resetSubtitleAssist();
     modeRef.current = 'loading';
@@ -1313,7 +1495,17 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           }
         );
         const compatibleSources = affinityResult.candidates;
-        const externalMkvSources = selectVlcFallbackCandidates(found);
+        const memoryOrderedMkvSources = applySourceMemory(selectVlcFallbackCandidates(found), sourceMemory);
+        const externalMkvSources = rankSourceAffinity(
+          memoryOrderedMkvSources,
+          selectedSourceAffinityHint,
+          {
+            protectedFingerprint: isRememberedCandidate(memoryOrderedMkvSources[0], sourceMemory)
+              ? sourceMemory?.preferred?.fingerprint
+              : undefined,
+            penalties: sourceMemory?.penalties
+          }
+        ).candidates;
 
         const rememberedSource = isRememberedCandidate(compatibleSources[0], sourceMemory);
         const rememberedOriginalIndex = rememberedSource
@@ -1359,10 +1551,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
               : `Checking source 1 of ${compatibleSources.length}...`
           );
         } else if (externalMkvSources.length > 0) {
-          setMode('vlc_fallback');
-          modeRef.current = 'vlc_fallback';
-          setPlaybackError("No browser-compatible source was found. These MKV files can be opened in VLC.");
-          setIsLoading(false);
+          void startInternalMkvFallback(0, false);
         } else {
           setMode('error');
           modeRef.current = 'error';
@@ -1385,8 +1574,20 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     return () => { 
       active = false; 
       controller.abort();
+      transcodeGenerationRef.current += 1;
+      stopActiveTranscode();
     };
-  }, [request, resolutionAttempt, isIOS, resetPlaybackProof, resetSubtitleAssist]);
+  }, [request, resolutionAttempt, isIOS, resetPlaybackProof, resetSubtitleAssist, startInternalMkvFallback, stopActiveTranscode]);
+
+  useEffect(() => {
+    if (!activeTranscode) return;
+    const sendHeartbeat = () => {
+      void transcoderClientRef.current.heartbeat(activeTranscode.sessionId, activeTranscode.token);
+    };
+    sendHeartbeat();
+    const heartbeatTimer = window.setInterval(sendHeartbeat, 15_000);
+    return () => window.clearInterval(heartbeatTimer);
+  }, [activeTranscode?.sessionId, activeTranscode?.token]);
 
   const attemptPlayback = async () => {
     const video = videoRef.current;
@@ -1442,25 +1643,84 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     }
   };
 
-  const seekBy = (seconds: number) => {
-    const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration)) return;
-    const previousTime = video.currentTime;
-    const targetTime = Math.min(video.duration, Math.max(0, previousTime + seconds));
-    video.currentTime = targetTime;
-    if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
-    setPlaybackClock(current => ({ ...current, current: video.currentTime, duration: video.duration }));
-  };
+  const seekTranscodedPlayback = useCallback(async (targetTime: number, resumeAfterSeek: boolean) => {
+    const transcoded = activeTranscodeRef.current;
+    if (!transcoded) return false;
 
-  const seekTo = (seconds: number) => {
     const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration)) return;
-    const previousTime = video.currentTime;
-    const targetTime = Math.min(video.duration, Math.max(0, seconds));
+    try { video?.pause(); } catch { /* The source reload still proceeds. */ }
+    setMode('loading');
+    modeRef.current = 'loading';
+    setIsLoading(true);
+    setIsMidstreamBuffering(false);
+    setSourceValidated(false);
+    sourceValidatedRef.current = false;
+    setAutoplayBlocked(false);
+    setStatusText(`Jumping to ${formatPlaybackTime(targetTime)}...`);
+    transcodeSeekAutoplayRef.current = resumeAfterSeek;
+
+    try {
+      const response = await transcoderClientRef.current.seek(
+        transcoded.sessionId,
+        transcoded.token,
+        targetTime
+      );
+      if (activeTranscodeRef.current?.sessionId !== transcoded.sessionId) return false;
+
+      const revisionSeparator = response.streamUrl.includes("?") ? "&" : "?";
+      updateActiveTranscode({
+        ...transcoded,
+        streamUrl: `${response.streamUrl}${revisionSeparator}v=${Date.now()}`,
+        startTime: targetTime
+      });
+      setMode('playing');
+      modeRef.current = 'playing';
+      resumeAppliedForSourceRef.current = true;
+      candidateAdvanceLockRef.current = false;
+      playAttemptedForSourceRef.current = false;
+      setPlaybackClock({ current: targetTime, duration: transcoded.durationSeconds, playing: false });
+      return true;
+    } catch {
+      transcodeSeekAutoplayRef.current = false;
+      recordCurrentSourceFailure("media-error");
+      handleNextCandidate();
+      return false;
+    }
+  }, [handleNextCandidate, recordCurrentSourceFailure, updateActiveTranscode]);
+
+  const seekBy = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const duration = getEffectivePlaybackDuration(video);
+    if (!Number.isFinite(duration)) return;
+    const previousTime = getEffectivePlaybackTime(video);
+    const targetTime = Math.min(duration, Math.max(0, previousTime + seconds));
+    if (activeTranscodeRef.current) {
+      if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
+      void seekTranscodedPlayback(targetTime, !video.paused);
+      return;
+    }
     video.currentTime = targetTime;
     if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
-    setPlaybackClock(current => ({ ...current, current: video.currentTime, duration: video.duration }));
-  };
+    setPlaybackClock(current => ({ ...current, current: video.currentTime, duration }));
+  }, [activateSubtitleAssist, getEffectivePlaybackDuration, getEffectivePlaybackTime, seekTranscodedPlayback]);
+
+  const seekTo = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const duration = getEffectivePlaybackDuration(video);
+    if (!Number.isFinite(duration)) return;
+    const previousTime = getEffectivePlaybackTime(video);
+    const targetTime = Math.min(duration, Math.max(0, seconds));
+    if (activeTranscodeRef.current) {
+      if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
+      void seekTranscodedPlayback(targetTime, !video.paused);
+      return;
+    }
+    video.currentTime = targetTime;
+    if (isMeaningfulBackwardSeek(previousTime, targetTime)) activateSubtitleAssist("rewind");
+    setPlaybackClock(current => ({ ...current, current: video.currentTime, duration }));
+  }, [activateSubtitleAssist, getEffectivePlaybackDuration, getEffectivePlaybackTime, seekTranscodedPlayback]);
 
   const handleEpisodeEnded = useCallback(() => {
     if (!sourceValidatedRef.current) return;
@@ -1498,8 +1758,10 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setAutoplayCountdown(null);
     setCreditsAutoplayCountdown(null);
     setShowCreditsNext(false);
+    transcodeGenerationRef.current += 1;
+    stopActiveTranscode();
     onPlayNext();
-  }, [clearCurrentPlaybackProgress, nextRequest, onEpisodeComplete, onPlayNext]);
+  }, [clearCurrentPlaybackProgress, nextRequest, onEpisodeComplete, onPlayNext, stopActiveTranscode]);
 
   const startAlternativeEpisode = useCallback((alternativeRequest: PlaybackRequest) => {
     clearCurrentPlaybackProgress();
@@ -1513,8 +1775,10 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setCreditsAutoplayCountdown(null);
     setCreditsAlternativesDismissed(true);
     setShowCreditsNext(false);
+    transcodeGenerationRef.current += 1;
+    stopActiveTranscode();
     onPlayAlternative(alternativeRequest);
-  }, [clearCurrentPlaybackProgress, onEpisodeComplete, onPlayAlternative]);
+  }, [clearCurrentPlaybackProgress, onEpisodeComplete, onPlayAlternative, stopActiveTranscode]);
 
   const activeSkipSegment = findActiveIntroDBSegment(
     introDBSegments,
@@ -1629,11 +1893,12 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     }
 
     const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration)) return;
-    const target = Math.min(video.duration, activeSkipSegment.endSeconds + 0.25);
-    video.currentTime = target;
-    setPlaybackClock(current => ({ ...current, current: target, duration: video.duration }));
-  }, [activeSkipSegment, nextRequest, startNextEpisode]);
+    if (!video) return;
+    const duration = getEffectivePlaybackDuration(video);
+    if (!Number.isFinite(duration)) return;
+    const target = Math.min(duration, activeSkipSegment.endSeconds + 0.25);
+    seekTo(target);
+  }, [activeSkipSegment, getEffectivePlaybackDuration, nextRequest, seekTo, startNextEpisode]);
 
   useEffect(() => {
     if (!activeSkipSegment || !shouldAutomaticallySkipSegment(
@@ -1646,12 +1911,13 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     )) return;
 
     const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    if (!video) return;
+    const duration = getEffectivePlaybackDuration(video);
+    if (!Number.isFinite(duration) || duration <= 0) return;
     const skippedType = activeSkipSegment.type;
-    const target = Math.min(video.duration, activeSkipSegment.endSeconds + 0.25);
+    const target = Math.min(duration, activeSkipSegment.endSeconds + 0.25);
     setIgnoredSegmentTypes(current => current.includes(skippedType) ? current : [...current, skippedType]);
-    video.currentTime = target;
-    setPlaybackClock(current => ({ ...current, current: target, duration: video.duration }));
+    seekTo(target);
     setAutoSkipNotice(`${skippedType === "intro" ? "Intro" : "Recap"} skipped`);
 
     if (autoSkipNoticeTimerRef.current !== null) window.clearTimeout(autoSkipNoticeTimerRef.current);
@@ -1659,7 +1925,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       setAutoSkipNotice(null);
       autoSkipNoticeTimerRef.current = null;
     }, 2_200);
-  }, [activeSkipSegment, autoSkipEnabled, playbackClock.current, playbackClock.playing]);
+  }, [activeSkipSegment, autoSkipEnabled, getEffectivePlaybackDuration, playbackClock.current, playbackClock.playing, seekTo]);
 
   useEffect(() => () => {
     if (autoSkipNoticeTimerRef.current !== null) window.clearTimeout(autoSkipNoticeTimerRef.current);
@@ -1671,7 +1937,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     if (request.isMovie || !sourceValidated) return;
     if (introDBLookupStatus !== "done" && introDBLookupStatus !== "failed") return;
     const imdbId = resolvedImdbIdRef.current;
-    const durationSeconds = videoRef.current?.duration;
+    const durationSeconds = videoRef.current ? getEffectivePlaybackDuration(videoRef.current) : undefined;
     if (!imdbId || !Number.isFinite(durationSeconds) || !durationSeconds) return;
     const lookupKey = `${imdbId.toLowerCase()}:${request.season}:${request.number}:${Math.round(durationSeconds)}`;
     if (skipDBLookupKeyRef.current === lookupKey) return;
@@ -1689,7 +1955,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         if (active) console.warn("SkipDB timestamps are unavailable for this episode", error);
       });
     return () => { active = false; };
-  }, [introDBLookupStatus, introDBSegments, request.isMovie, request.number, request.season, sourceValidated]);
+  }, [getEffectivePlaybackDuration, introDBLookupStatus, introDBSegments, request.isMovie, request.number, request.season, sourceValidated]);
 
   useEffect(() => {
     const shouldFocusSkip = creditsWindowActive || Boolean(activeSkipSegment && activeSkipSegment.type !== "outro");
@@ -1714,14 +1980,20 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setCreditsAutoplayCountdown(null);
     setCreditsAutoplayDismissed(false);
     setCreditsAlternativesDismissed(false);
-    video.currentTime = 0;
-    void attemptPlayback();
+    if (activeTranscodeRef.current) {
+      void seekTranscodedPlayback(0, true);
+    } else {
+      video.currentTime = 0;
+      void attemptPlayback();
+    }
   };
 
   const closePlayer = useCallback(() => {
     persistPlaybackProgress(true);
+    transcodeGenerationRef.current += 1;
+    stopActiveTranscode();
     onClose();
-  }, [onClose, persistPlaybackProgress]);
+  }, [onClose, persistPlaybackProgress, stopActiveTranscode]);
 
   useEffect(() => {
     if (handledBackRequestRef.current === backRequestToken) return;
@@ -1825,8 +2097,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     });
   }, [nextRequest?.imdbId, nextRequest?.isMovie, nextRequest?.number, nextRequest?.season, shouldWarmNextSource]);
 
-  const mediaKeyActionsRef = useRef({ attemptPlayback, seekBy, togglePlayback });
-  mediaKeyActionsRef.current = { attemptPlayback, seekBy, togglePlayback };
+  const mediaKeyActionsRef = useRef({ attemptPlayback, seekBy, seekTo, togglePlayback });
+  mediaKeyActionsRef.current = { attemptPlayback, seekBy, seekTo, togglePlayback };
 
   useEffect(() => {
     const handleMediaKey = (event: KeyboardEvent) => {
@@ -1863,7 +2135,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         case 413: // Stop
           event.preventDefault();
           video.pause();
-          video.currentTime = 0;
+          mediaActions.seekTo(0);
           setShowUI(true);
           break;
       }
@@ -1878,8 +2150,9 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   useEffect(() => {
     if (mode !== 'playing' || !currentStream) return;
 
-    const currentCandidate = playableCandidatesRef.current[candidateIndexRef.current];
-    if (!currentCandidate || currentCandidate.url !== currentStream) return;
+    const transcoded = activeTranscodeRef.current;
+    const currentCandidate = transcoded?.candidate || playableCandidatesRef.current[candidateIndexRef.current];
+    if (!currentCandidate || (!transcoded && currentCandidate.url !== currentStream)) return;
     candidateAdvanceLockRef.current = false;
     playAttemptedForSourceRef.current = false;
     sourceValidatedRef.current = false;
@@ -1889,14 +2162,16 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     setAutoplayBlocked(false);
     setIsLoading(true);
     setStatusText(
-      currentCandidate.id === rememberedCandidateIdRef.current
+      transcoded
+        ? "Starting prepared MKV stream inside NextUp..."
+        : currentCandidate.id === rememberedCandidateIdRef.current
         ? "Reconnecting to your previous source..."
         : `Checking source ${candidateIndexRef.current + 1} of ${playableCandidatesRef.current.length}...`
     );
 
     const video = videoRef.current;
     const startedAt = Date.now();
-    const firstAttempt = candidateIndexRef.current === 0;
+    const firstAttempt = transcoded ? transcoded.candidateIndex === 0 : candidateIndexRef.current === 0;
     const initialBufferedEnd = getBufferedEndSeconds(video?.buffered);
     let latestBufferedEnd = initialBufferedEnd;
     let progressEventSeen = false;
@@ -1913,8 +2188,10 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       const activeVideo = videoRef.current;
       if (activeVideo) {
         latestBufferedEnd = Math.max(latestBufferedEnd, getBufferedEndSeconds(activeVideo.buffered));
-        const validation = validateCurrentSource(activeVideo);
-        if (validation !== 'pending') return;
+        if (activeVideo.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          const validation = validateCurrentSource(activeVideo);
+          if (validation !== 'pending') return;
+        }
         if (activeVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) progressEventSeen = true;
       }
 
@@ -1961,7 +2238,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       // Only show spinner if video actually lacks sufficient buffer data
       if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
         setIsLoading(true);
-        if (sourceValidatedRef.current && video.currentTime > 0) {
+        if (sourceValidatedRef.current && getEffectivePlaybackTime(video) > 0) {
           setIsMidstreamBuffering(true);
         }
       }
@@ -2004,8 +2281,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       setAutoplayBlocked(false);
       setStatusText("Playing");
       setPlaybackClock({
-        current: video.currentTime || 0,
-        duration: Number.isFinite(video.duration) ? video.duration : 0,
+        current: getEffectivePlaybackTime(video) || 0,
+        duration: Number.isFinite(getEffectivePlaybackDuration(video)) ? getEffectivePlaybackDuration(video) : 0,
         playing: !video.paused
       });
       if (stallTimer) clearTimeout(stallTimer);
@@ -2017,17 +2294,19 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
     };
 
     const handleTimeUpdate = () => {
-      const wholeSecond = Math.floor(video.currentTime || 0);
+      const effectiveTime = getEffectivePlaybackTime(video);
+      const effectiveDuration = getEffectivePlaybackDuration(video);
+      const wholeSecond = Math.floor(effectiveTime || 0);
       if (wholeSecond !== lastClockSecondRef.current) {
         lastClockSecondRef.current = wholeSecond;
         setPlaybackClock({
-          current: video.currentTime || 0,
-          duration: Number.isFinite(video.duration) ? video.duration : 0,
+          current: effectiveTime || 0,
+          duration: Number.isFinite(effectiveDuration) ? effectiveDuration : 0,
           playing: !video.paused
         });
       }
 
-      if (!video.paused && video.currentTime > 0) {
+      if (!video.paused && effectiveTime > 0) {
         if (!sourceValidatedRef.current) {
           const validation = validateCurrentSource(video);
           if (validation !== 'valid') {
@@ -2044,11 +2323,11 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         confirmCurrentSourceIfProven(video);
 
         const hasUsableIntroDBOutro = Boolean(
-          introDBSegments.outro && introDBSegments.outro.startSeconds < video.duration
+          introDBSegments.outro && introDBSegments.outro.startSeconds < effectiveDuration
         );
         const shouldShowCreditsShortcut = !hasUsableIntroDBOutro && shouldOfferNextEpisodeShortcut(
-          video.duration,
-          video.currentTime,
+          effectiveDuration,
+          effectiveTime,
           Boolean(nextRequest)
         );
         setShowCreditsNext(current => current === shouldShowCreditsShortcut ? current : shouldShowCreditsShortcut);
@@ -2091,8 +2370,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       if (validation === 'valid') applySavedProgress(video);
       setPlaybackClock(current => ({
         ...current,
-        current: video.currentTime || 0,
-        duration: Number.isFinite(video.duration) ? video.duration : 0
+        current: getEffectivePlaybackTime(video) || 0,
+        duration: Number.isFinite(getEffectivePlaybackDuration(video)) ? getEffectivePlaybackDuration(video) : 0
       }));
       if (validation === 'valid') ensureEnglishAudio(video);
       if (!syncDetectedEnglishSubtitleTrack() && validation === 'valid') {
@@ -2122,8 +2401,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       setIsMidstreamBuffering(false);
       setShowUI(true);
       setPlaybackClock({
-        current: video.currentTime || 0,
-        duration: Number.isFinite(video.duration) ? video.duration : 0,
+        current: getEffectivePlaybackTime(video) || 0,
+        duration: Number.isFinite(getEffectivePlaybackDuration(video)) ? getEffectivePlaybackDuration(video) : 0,
         playing: false
       });
     };
@@ -2136,6 +2415,12 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       
 
       if (isIOS) {
+        if (transcodeSeekAutoplayRef.current) {
+          transcodeSeekAutoplayRef.current = false;
+          playAttemptedForSourceRef.current = true;
+          void attemptPlayback();
+          return;
+        }
         setAutoplayBlocked(true);
         setIsLoading(false);
         setStatusText("Video is ready. Tap play to begin.");
@@ -2172,8 +2457,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       playbackProofRef.current.baselineSeconds = video.currentTime;
       persistPlaybackProgress(true);
       setPlaybackClock({
-        current: video.currentTime || 0,
-        duration: Number.isFinite(video.duration) ? video.duration : 0,
+        current: getEffectivePlaybackTime(video) || 0,
+        duration: Number.isFinite(getEffectivePlaybackDuration(video)) ? getEffectivePlaybackDuration(video) : 0,
         playing: !video.paused
       });
       if (!video.paused) handlePlaying();
@@ -2216,7 +2501,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
       video.removeEventListener('error', handleVideoError);
       video.textTracks?.removeEventListener('addtrack', syncDetectedEnglishSubtitleTrack);
     };
-  }, [activateSubtitleAssist, applySavedProgress, confirmCurrentSourceIfProven, currentStream, mode, autoplayBlocked, enableSubtitleAssist, ensureEnglishAudio, handleNextCandidate, introDBSegments.outro, isIOS, loadOnlineCaptions, nextRequest, persistPlaybackProgress, recordCurrentSourceFailure, showControlsTemporarily, validateCurrentSource]);
+  }, [activateSubtitleAssist, applySavedProgress, confirmCurrentSourceIfProven, currentStream, mode, autoplayBlocked, enableSubtitleAssist, ensureEnglishAudio, getEffectivePlaybackDuration, getEffectivePlaybackTime, handleNextCandidate, introDBSegments.outro, isIOS, loadOnlineCaptions, nextRequest, persistPlaybackProgress, recordCurrentSourceFailure, showControlsTemporarily, validateCurrentSource]);
 
   useEffect(() => {
     const handlePointerMove = (event: MouseEvent) => {
@@ -2280,13 +2565,13 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
               )}
               {currentStream && (
                 <div data-phone-player-quick-actions="true" className="flex max-w-full items-center gap-2 sm:gap-3 mt-1.5 sm:mt-2 pointer-events-auto overflow-x-auto sm:flex-wrap scrollbar-none pb-1">
-                  {playableCandidates.length > 1 && (
+                  {playableCandidates.length + vlcCandidates.length > 1 && (
                     <button
                       onClick={() => handleNextCandidate(true)}
                       className="shrink-0 min-h-10 w-max px-3 sm:px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-full text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 backdrop-blur-md border border-white/5"
                     >
                       <RefreshCcw className="w-4 h-4" />
-                      Next source ({candidateIndex + 1}/{playableCandidates.length})
+                      Next source
                     </button>
                   )}
                   <button
@@ -2295,7 +2580,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
                     className="shrink-0 min-h-10 w-max px-3 sm:px-4 py-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-full text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 backdrop-blur-md border border-white/10"
                   >
                     <List className="w-4 h-4" />
-                    Phone sources ({playableCandidates.length})
+                    Sources ({playableCandidates.length + vlcCandidates.length})
                   </button>
                   {nextRequest && sourceValidated && (
                     <button
@@ -2649,7 +2934,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
         </div>
       )}
 
-      {/* MODE: VLC fallback — reached only after browser playback is unavailable. */}
+      {/* MODE: VLC fallback — reached only after native and internal MKV playback fail. */}
       {mode === 'vlc_fallback' && (
         <div
           data-phone-vlc-fallback="true"
@@ -2660,12 +2945,12 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
               <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center">
                 <ExternalLink className="w-8 h-8 text-orange-400" />
               </div>
-              <p className="text-orange-400 text-xs font-extrabold uppercase tracking-[0.2em] mb-2">Browser fallback</p>
-              <h2 className="text-2xl sm:text-3xl font-display font-bold text-white">Open the MKV in VLC</h2>
+              <p className="text-orange-400 text-xs font-extrabold uppercase tracking-[0.2em] mb-2">Emergency fallback</p>
+              <h2 className="text-2xl sm:text-3xl font-display font-bold text-white">Continue in VLC</h2>
               <p className="text-slate-300 text-sm sm:text-base mt-3 max-w-xl mx-auto leading-relaxed">
-                {playbackError || "No compatible browser source could be played."} VLC can handle the remaining MKV options.
+                {playbackError || "NextUp could not prepare an in-app stream."} VLC can still handle the original MKV options.
               </p>
-              <p className="text-slate-500 text-xs mt-2">This screen appears only after phone-compatible sources are unavailable or fail.</p>
+              <p className="text-slate-500 text-xs mt-2">This appears only after phone-ready sources and NextUp’s internal MKV playback have both failed.</p>
             </div>
 
             <div className="space-y-3">
@@ -2720,7 +3005,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
                 className="min-h-[52px] px-5 py-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-bold flex items-center justify-center gap-2"
               >
                 <RefreshCcw className="w-4 h-4" />
-                Search browser sources again
+                Try in-app playback again
               </button>
               <button
                 type="button"
@@ -2886,7 +3171,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="Phone-ready sources"
+            aria-label="Playback sources"
             data-phone-source-selector="true"
             className="relative w-full max-w-md md:max-w-lg bg-slate-950 border-l border-white/10 h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col shadow-2xl z-[230]"
           >
@@ -2894,10 +3179,10 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
               <div>
                 <h3 className="text-white text-lg font-bold flex items-center gap-2">
                   <Database className="w-5 h-5 text-orange-500" />
-                  Phone-Ready Sources
+                  Playback Sources
                 </h3>
                 <p className="text-white/60 text-xs mt-1">
-                  {playableCandidates.length} ranked source{playableCandidates.length === 1 ? "" : "s"} · MP4-first for mobile
+                  {playableCandidates.length + vlcCandidates.length} ranked source{playableCandidates.length + vlcCandidates.length === 1 ? "" : "s"} · MP4 first
                 </p>
               </div>
               <button
@@ -2922,7 +3207,7 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
 
               <div className="space-y-2" data-tv-section="source-list">
                 {playableCandidates.map((candidate, index) => {
-                  const isActive = mode === 'playing' && index === candidateIndex;
+                  const isActive = mode === 'playing' && !activeTranscode && index === candidateIndex;
                   return (
                     <button
                       key={candidate.id || `source-${index}`}
@@ -2949,6 +3234,50 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
                   );
                 })}
               </div>
+
+              {vlcCandidates.length > 0 && (
+                <div className="mt-6 pt-5 border-t border-white/10">
+                  <div className="flex items-center justify-between text-xs font-bold text-orange-300 mb-3">
+                    <span className="flex items-center gap-1.5">
+                      <Film className="w-4 h-4" />
+                      MKV inside NextUp
+                    </span>
+                    <span className="text-[10px] bg-orange-500/10 px-2 py-0.5 rounded border border-orange-500/20">
+                      Prepared by your server
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {vlcCandidates.map((candidate, index) => {
+                      const isActive = mode === 'playing' && activeTranscode?.candidateIndex === index;
+                      return (
+                        <button
+                          key={candidate.id || `mkv-source-${index}`}
+                          data-tv-default-focus={isActive ? "true" : undefined}
+                          onClick={() => selectInternalCandidate(index)}
+                          className={`w-full text-left p-4 rounded-xl transition-all border flex flex-col gap-3 focus:outline-none focus:ring-4 focus:ring-orange-400 ${
+                            isActive
+                              ? 'bg-orange-500/15 border-orange-500/60'
+                              : 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/15'
+                          }`}
+                          aria-label={`Prepare MKV source ${index + 1} inside NextUp${candidate.quality ? `, ${candidate.quality}` : ""}`}
+                        >
+                          <div className="flex items-center justify-between gap-3 w-full">
+                            <StreamBadges cand={candidate} />
+                            <span className={`shrink-0 text-xs font-bold flex items-center gap-1 ${isActive ? "text-orange-400" : "text-white/70"}`}>
+                              {isActive ? <Check className="w-4 h-4" /> : <PlayCircle className="w-4 h-4" />}
+                              {isActive ? "Playing" : "Play"}
+                            </span>
+                          </div>
+                          <p className="text-white/90 text-xs font-mono leading-relaxed break-all line-clamp-2">
+                            {candidate.title}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -7,6 +7,17 @@ import { TranscodeSessionManager } from "./sessionManager.js";
 import { extractSubtitleToWebVTT } from "./subtitleExtractor.js";
 import { TranscodeSessionConfig } from "./types.js";
 
+export function rewriteHlsPlaylistWithToken(content: string, token: string): string {
+  const appendToken = (uri: string) => {
+    if (!/^(?:segment_\d+\.(?:ts|m4s)|init\.mp4)$/.test(uri)) return uri;
+    return `${uri}?token=${encodeURIComponent(token)}`;
+  };
+
+  return content
+    .replace(/URI="([^"]+)"/g, (_match, uri: string) => `URI="${appendToken(uri)}"`)
+    .replace(/^(segment_\d+\.(?:ts|m4s)|init\.mp4)$/gm, (_match, uri: string) => appendToken(uri));
+}
+
 export function createTranscoderRouter(sessionManager = new TranscodeSessionManager()): Router {
   const router = Router();
 
@@ -115,8 +126,8 @@ export function createTranscoderRouter(sessionManager = new TranscodeSessionMana
 
       // Read playlist and rewrite segment paths to include session token
       let content = fs.readFileSync(playlistPath, "utf8");
-      // Append ?token=... to segment links so subsequent requests maintain authorization
-      content = content.replace(/^(segment_\d+\.(?:ts|m4s)|init\.mp4)$/gm, `$1?token=${encodeURIComponent(token)}`);
+      // Append the session token to media segments and the fMP4 init URI.
+      content = rewriteHlsPlaylistWithToken(content, token);
 
       res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");

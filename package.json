@@ -1,7 +1,7 @@
 {
   "name": "nextup-phone",
   "private": true,
-  "version": "1.0.59-phone.16",
+  "version": "1.0.59-phone.17",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",

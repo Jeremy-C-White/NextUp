@@ -1,4 +1,4 @@
-import {
+import type {
   MediaProbeResult,
   TranscodeSessionConfig,
 } from "../server/transcoder/types.js";
@@ -25,7 +25,9 @@ export class TranscoderClient {
   public async isHealthy(): Promise<boolean> {
     try {
       const resp = await fetch(`${this.baseUrl}/health`);
-      return resp.ok;
+      if (!resp.ok) return false;
+      const body = await resp.json().catch(() => null);
+      return body?.status === "ok" && body?.service === "nextup-transcoder";
     } catch {
       return false;
     }

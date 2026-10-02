@@ -81,8 +81,9 @@ export class TranscodeSessionManager {
 
     this.limiter.trackSessionStart(clientIp);
 
+    let ffmpeg: FFmpegInstance | null = null;
     try {
-      const ffmpeg = spawnFFmpegSession({
+      ffmpeg = spawnFFmpegSession({
         sourceUrl: config.sourceUrl,
         probe,
         config,
@@ -90,7 +91,7 @@ export class TranscodeSessionManager {
       });
 
       // Wait until the initial HLS segments and playlist are ready
-      await ffmpeg.waitUntilReady(15000);
+      await ffmpeg.waitUntilReady(25000);
 
       const session: ActiveSession = {
         id: sessionId,
@@ -110,6 +111,7 @@ export class TranscodeSessionManager {
       return session;
     } catch (err: any) {
       this.limiter.trackSessionEnd(clientIp);
+      if (ffmpeg) await ffmpeg.stop().catch(() => {});
       try {
         if (fs.existsSync(workDir)) {
           fs.rmSync(workDir, { recursive: true, force: true });
