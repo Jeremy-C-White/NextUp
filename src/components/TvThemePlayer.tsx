@@ -191,8 +191,8 @@ export const TvThemePlayer = forwardRef<TvThemePlayerHandle, TvThemePlayerProps>
             return;
           }
           if (result === "blocked") {
-            // iPhone Safari may require one explicit tap. Keep this exact
-            // resolved source loaded for the visible Play theme button.
+            // iPhone Safari may require one explicit gesture. Keep this exact
+            // resolved source loaded so the next normal screen touch can retry it.
             onStatusChange("blocked");
             return;
           }
@@ -243,7 +243,7 @@ export const TvThemePlayer = forwardRef<TvThemePlayerHandle, TvThemePlayerProps>
       // next visit asks again instead of reusing a dead link.
       forgetFallbackTheme(show.id);
       if (result === "blocked") {
-        // Preserve the signed Deezer preview URL for the user's tap gesture.
+        // Preserve the signed Deezer preview URL for the next user gesture.
         onStatusChange("blocked");
       } else {
         resetAudio();

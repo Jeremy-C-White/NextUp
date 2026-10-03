@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, TouchEvent as ReactTouchEvent } from "react";
-import { CheckCircle2, Music2, PlayCircle } from "lucide-react";
+import { CheckCircle2, PlayCircle } from "lucide-react";
 import { UserEpisode, UserShow } from "../types";
 import { getEpisodeReleaseTime } from "../lib/episodes";
 import { optimizeArtworkUrl } from "../lib/images";
@@ -432,6 +432,10 @@ export function UpNextTab({
     onPlay(activeItem.show, activeItem.nextEp);
   };
 
+  const unlockBlockedTheme = useCallback(() => {
+    if (themeStatus === "blocked") themePlayerRef.current?.play();
+  }, [themeStatus]);
+
   const activateFromThumbnail = (index: number) => {
     setActiveIndex(index);
     window.requestAnimationFrame(() => heroPlayButtonRef.current?.focus({ preventScroll: true }));
@@ -447,7 +451,12 @@ export function UpNextTab({
   };
 
   return (
-    <section data-tv-up-next-screen="true" data-tv-adjacent-artwork-preload="true" className="tv-up-next-dashboard relative flex flex-col gap-3">
+    <section
+      data-tv-up-next-screen="true"
+      data-tv-adjacent-artwork-preload="true"
+      className="tv-up-next-dashboard relative flex flex-col gap-3"
+      onPointerDown={unlockBlockedTheme}
+    >
       <TvThemePlayer
         ref={themePlayerRef}
         show={activeItem?.show}
@@ -456,17 +465,6 @@ export function UpNextTab({
       />
       <div className="tv-up-next-heading flex flex-wrap items-center gap-x-4 gap-y-1">
         {items.length > 0 && <p className="min-w-0 flex-1 truncate text-slate-600 dark:text-slate-400 text-sm sm:text-base">{queueSummary}</p>}
-        {themeStatus === "blocked" && themeMusicEnabled && (
-          <button
-            type="button"
-            onClick={() => themePlayerRef.current?.play()}
-            className="ml-auto inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-orange-400/35 bg-orange-500/15 px-3 py-2 text-xs font-bold text-orange-300 active:scale-95"
-            aria-label="Play this show's theme music"
-          >
-            <Music2 className="h-4 w-4" />
-            Play theme
-          </button>
-        )}
       </div>
 
       {items.length === 0 && isReady ? (
