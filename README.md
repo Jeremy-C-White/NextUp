@@ -6,6 +6,8 @@ The interface is tuned for iPhone portrait and landscape layouts, including safe
 
 The mobile Next Up screen uses a finger-tracking fan-card hero, official title-logo artwork when available, a subtle artwork-derived background, a clear Resume/Play action, and one-tap queue cards without thumbnail progress bars. Optional auto-skip waits 10 seconds before skipping a detected intro or recap; IntroDB remains primary and SkipDB fills missing timing data.
 
+Discover includes a Just Released row for movies that first became available to watch at home in the US during the last 60 days. It covers digital rental or purchase, streaming, disc, and television releases while excluding theater-only titles and older movies that merely received another format later.
+
 ## Prerequisites
 
 - Node.js (v18+)

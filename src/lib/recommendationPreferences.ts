@@ -11,6 +11,7 @@ export interface RecommendationCandidate {
   runtime?: number;
   isMovie?: boolean;
   premiered?: string;
+  homeReleaseDate?: string;
 }
 
 export interface RecommendationFeedbackEntry {
@@ -35,6 +36,7 @@ export type RecommendationSource =
   | { kind: "trending" }
   | { kind: "hidden-gem" }
   | { kind: "premiering" }
+  | { kind: "just-released" }
   | { kind: "network"; name: string };
 
 export interface RecommendationReasonContext {
@@ -240,12 +242,25 @@ function findMostRecentGenreMatch(
   return entries.find(entry => sharedGenreCount(candidate, normalizeGenres(entry.genres)) > 0) || null;
 }
 
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function formatHomeReleaseReason(homeReleaseDate: string | undefined): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(homeReleaseDate || "");
+  const month = match ? Number(match[2]) : 0;
+  const day = match ? Number(match[3]) : 0;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "New to watch at home";
+  return `At home since ${SHORT_MONTHS[month - 1]} ${day}`;
+}
+
 export function getRecommendationReason(
   candidate: RecommendationCandidate,
   context: RecommendationReasonContext
 ): string {
   if (context.inLibrary && context.hasNewEpisode) return "A new episode from your Library";
   if (context.inLibrary) return "Saved in your Library";
+  if (context.source.kind === "just-released" && candidate.homeReleaseDate) {
+    return formatHomeReleaseReason(candidate.homeReleaseDate);
+  }
 
   const positiveEntries = Object.values(context.profile.entries)
     .filter(entry => entry.kind === "more-like-this" && entry.key !== getRecommendationCandidateKey(candidate))
@@ -273,6 +288,7 @@ export function getRecommendationReason(
   }
 
   switch (context.source.kind) {
+    case "just-released": return formatHomeReleaseReason(candidate.homeReleaseDate);
     case "trending": return "Trending this week";
     case "hidden-gem": return "Highly rated and easy to miss";
     case "premiering": return "A new arrival for your radar";

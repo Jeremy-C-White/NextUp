@@ -4,7 +4,7 @@ import { getCached as apiGetCached, setCached as apiSetCached } from "./apiCache
 function getCached<T>(key: string) { return apiGetCached<T>("tmdb", "legacy", [key]); }
 function setCached<T>(key: string, data: T, ttl = 60) { apiSetCached<T>("tmdb", "legacy", [key], data, ttl); }
 import { fetchJson } from "./httpClient";
-import { findReleasedDigitalDate } from "./movieRelease";
+import { findFirstHomeReleaseDate, findReleasedDigitalDate } from "./movieRelease";
 
 const BASE_URL = "https://api.themoviedb.org/3";
 const INLINE_TMDB_API_KEY = "a333c3f3e191efa5f618f63969abdaa0";
@@ -121,6 +121,73 @@ export async function getTrendingMoviesTMDB(): Promise<Show[]> {
   
   const shows = data.results.slice(0, 10).map(enrichTMDBMovie);
   setCached(cacheKey, shows);
+  return shows;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const JUST_RELEASED_WINDOW_DAYS = 60;
+const JUST_RELEASED_CANDIDATE_PAGES = 2;
+const JUST_RELEASED_LIMIT = 20;
+
+function toIsoDay(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+/**
+ * Movies that first became available at home in the US during the last 60
+ * days, whether by digital rental/purchase, streaming, disc or television.
+ */
+export async function getJustReleasedMoviesTMDB(now: number = Date.now()): Promise<Show[]> {
+  const cacheKey = 'tmdb_just_released_us_v1';
+  const cached = getCached<Show[]>(cacheKey);
+  if (cached) return cached;
+
+  const windowStart = now - JUST_RELEASED_WINDOW_DAYS * DAY_MS;
+  const params = {
+    region: 'US',
+    with_release_type: '4|5|6',
+    'release_date.gte': toIsoDay(windowStart),
+    'release_date.lte': toIsoDay(now),
+    sort_by: 'popularity.desc',
+    'vote_count.gte': '10',
+    include_adult: 'false'
+  };
+
+  const firstPage = await fetchTMDB('/discover/movie', { ...params, page: '1' });
+  const laterPages = await Promise.all(
+    Array.from({ length: JUST_RELEASED_CANDIDATE_PAGES - 1 }, (_, index) =>
+      fetchTMDB('/discover/movie', { ...params, page: String(index + 2) }).catch(() => null)
+    )
+  );
+  const seen = new Set<number>();
+  const candidates = [firstPage, ...laterPages]
+    .flatMap(page => Array.isArray(page?.results) ? page.results : [])
+    .filter((movie: any) => {
+      const id = Number(movie?.id);
+      if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
+  let checked = 0;
+  const confirmed = await Promise.all(candidates.map(async (movie: any) => {
+    try {
+      const releaseDates = await fetchTMDB(`/movie/${movie.id}/release_dates`);
+      checked += 1;
+      const homeReleaseDate = findFirstHomeReleaseDate(releaseDates, 'US', now);
+      if (!homeReleaseDate || new Date(homeReleaseDate).getTime() < windowStart) return null;
+      return { ...enrichTMDBMovie(movie), homeReleaseDate: homeReleaseDate.slice(0, 10) } as Show;
+    } catch {
+      return null;
+    }
+  }));
+
+  if (candidates.length > 0 && checked === 0) {
+    throw new Error("Could not check recent home releases.");
+  }
+
+  const shows = confirmed.filter((show): show is Show => show !== null).slice(0, JUST_RELEASED_LIMIT);
+  setCached(cacheKey, shows, 6 * 60);
   return shows;
 }
 

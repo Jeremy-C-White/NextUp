@@ -28,7 +28,7 @@ import { addShowToLibrary, getShowEpisodes, markEpisodeWatched, markEpisodesWatc
 import { getLibraryDocumentIds } from "./lib/libraryIdentity";
 import { checkAndNotifyUpcomingEpisodes } from "./lib/notifications";
 import { getTrendingShows, getPremieringSoon, resolveTVMazeShow, getShow, getTrendingTVMaze, getHiddenGems, getForYou } from "./lib/tvmaze";
-import { getTrendingTMDB, getTrendingMoviesTMDB, getRecommendationsTMDB, getTMDBIdFromIMDB, getTopShowsByNetwork, getHiddenGemsTMDB, getForYouTMDB, getTMDBExternalIds } from "./lib/tmdb";
+import { getTrendingTMDB, getTrendingMoviesTMDB, getJustReleasedMoviesTMDB, getRecommendationsTMDB, getTMDBIdFromIMDB, getTopShowsByNetwork, getHiddenGemsTMDB, getForYouTMDB, getTMDBExternalIds } from "./lib/tmdb";
 import { getBestAioStreamsSources, warmAioStreamsConnection } from "./lib/debrid";
 import { Tv, Search, LogOut, Settings, CheckCircle2, PlayCircle, Clock, ExternalLink, Compass, X, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { calculateProgress, isEpisodeReleased, getEpisodeReleaseTime, getReleasedEpisodes } from "./lib/episodes";
@@ -427,6 +427,7 @@ const loadWithFallback = async (
   const [detailsRecommendationReason, setDetailsRecommendationReason] = useState<string | null>(null);
   const [trendingShows, setTrendingShows] = useState<Show[]>([]);
   const [trendingMovies, setTrendingMovies] = useState<Show[]>([]);
+  const [justReleasedMovies, setJustReleasedMovies] = useState<Show[]>([]);
   const [premieringSoon, setPremieringSoon] = useState<Show[]>([]);
   const [hiddenGems, setHiddenGems] = useState<Show[]>([]);
   const [forYou, setForYou] = useState<Show[]>([]);
@@ -817,6 +818,7 @@ const loadWithFallback = async (
         setEpisodesMap({});
         setTrendingShows([]);
         setTrendingMovies([]);
+        setJustReleasedMovies([]);
         setPremieringSoon([]);
         setHiddenGems([]);
         setForYou([]);
@@ -1469,12 +1471,14 @@ const loadWithFallback = async (
         const [
           trending,
           movies,
+          justReleased,
           premiering,
           gems,
           forYouData
         ] = await Promise.all([
           loadWithFallback(getTrendingTMDB, getTrendingTVMaze),
           loadWithFallback(getTrendingMoviesTMDB),
+          loadWithFallback(() => getJustReleasedMoviesTMDB()),
           loadWithFallback(getPremieringSoon),
           loadWithFallback(getHiddenGemsTMDB, getHiddenGems),
           loadWithFallback(getForYouTMDB, getForYou)
@@ -1482,11 +1486,12 @@ const loadWithFallback = async (
         
         setTrendingShows(trending);
         setTrendingMovies(movies);
+        setJustReleasedMovies(justReleased);
         setPremieringSoon(premiering);
         setHiddenGems(gems);
         setForYou(forYouData);
 
-        if (![trending, movies, premiering, gems, forYouData].some(section => section.length > 0)) {
+        if (![trending, movies, justReleased, premiering, gems, forYouData].some(section => section.length > 0)) {
           throw new Error("No recommendation sources are available right now.");
         }
         discoverFetchedRef.current = true;
@@ -1578,6 +1583,7 @@ const loadWithFallback = async (
       { id: "popular-picks", title: "Popular picks", subtitle: "Reliable starting points.", shows: forYou, source: { kind: "popular" } },
       { id: "trending", title: "Trending series", subtitle: "Series drawing attention this week.", shows: trendingShows, source: { kind: "trending" } },
       { id: "trending-movies", title: "Trending movies", subtitle: "Popular movies this week.", shows: trendingMovies, source: { kind: "trending" } },
+      { id: "just-released", title: "Just Released", subtitle: "Movies new to rent, buy or stream in the last 60 days.", shows: justReleasedMovies, source: { kind: "just-released" } },
       { id: "hidden-gems", title: "Hidden gems", subtitle: "Strongly rated picks you may have missed.", shows: hiddenGems, source: { kind: "hidden-gem" } }
     ];
     const extendedDiscoverSections: Array<{ id: string; title: string; subtitle: string; shows: Show[]; source: RecommendationSource }> = [
@@ -1610,6 +1616,7 @@ const loadWithFallback = async (
   }, [
     forYou,
     hiddenGems,
+    justReleasedMovies,
     networkShows,
     premieringSoon,
     recommendationProfile,

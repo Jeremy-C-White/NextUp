@@ -21,6 +21,8 @@ export interface Show {
     thetvdb?: number;
   };
   _tmdbId?: number;
+  /** Movies: first date it could be watched at home (YYYY-MM-DD). */
+  homeReleaseDate?: string;
 }
 
 export interface Episode {
