@@ -1,10 +1,25 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
+import { createServer as createViteServer, loadEnv } from "vite";
+import {
+  isAllowedProviderProxyTarget,
+  normalizeProviderProxyBaseUrl
+} from "./src/server/providerProxySecurity.js";
 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+  const mode = process.env.NODE_ENV === "production" ? "production" : "development";
+  const fileEnvironment = loadEnv(mode, process.cwd(), "");
+  const configuredProviderUrl = process.env.AIOSTREAMS_PROXY_BASE_URL ||
+    process.env.VITE_AIOSTREAMS_BASE_URL ||
+    fileEnvironment.AIOSTREAMS_PROXY_BASE_URL ||
+    fileEnvironment.VITE_AIOSTREAMS_BASE_URL;
+  const providerProxyBase = normalizeProviderProxyBaseUrl(configuredProviderUrl);
+
+  if (configuredProviderUrl && !providerProxyBase) {
+    console.warn("AIOStreams proxy is disabled because its configured URL is invalid or unsafe.");
+  }
 
   app.use(express.json());
 
@@ -25,8 +40,13 @@ async function startServer() {
     } catch {
       return res.status(400).json({ error: "Invalid stream-provider URL" });
     }
-    if (parsedTarget.protocol !== "https:" && parsedTarget.hostname !== "localhost" && parsedTarget.hostname !== "127.0.0.1") {
-      return res.status(400).json({ error: "Stream-provider URL must use HTTPS" });
+    if (!providerProxyBase) {
+      return res.status(503).json({
+        error: "Server-side AIOStreams proxy is not configured; the app may try the provider directly."
+      });
+    }
+    if (!isAllowedProviderProxyTarget(parsedTarget, providerProxyBase)) {
+      return res.status(403).json({ error: "Stream-provider URL is not allowed" });
     }
 
     try {
@@ -50,7 +70,9 @@ async function startServer() {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9"
           },
-          signal: controller.signal
+          signal: controller.signal,
+          // A redirect could escape the validated provider allowlist.
+          redirect: "manual"
         });
       } finally {
         clearTimeout(timeout);

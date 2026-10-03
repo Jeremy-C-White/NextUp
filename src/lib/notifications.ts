@@ -127,6 +127,7 @@ export async function checkAndNotifyUpcomingEpisodes(shows: UserShow[]) {
     if (!show.episodes || show.episodes.length === 0) continue;
 
     for (const ep of show.episodes) {
+      if (ep.watched) continue;
       if (!ep.airstamp) continue;
       const airTime = new Date(ep.airstamp).getTime();
       if (isNaN(airTime)) continue;

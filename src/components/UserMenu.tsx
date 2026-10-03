@@ -70,7 +70,7 @@ export function UserMenu({ user, onOpenSettings, onSignOut }: UserMenuProps) {
         aria-expanded={isOpen}
         aria-controls={isOpen ? menuId : undefined}
         onClick={() => isOpen ? dismissMenu() : setIsOpen(true)}
-        className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-300 dark:hover:border-slate-700 flex items-center justify-center text-orange-500 font-bold uppercase transition-colors"
+        className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 flex items-center justify-center text-orange-500 font-bold uppercase transition-colors"
       >
         {initial}
       </button>
@@ -91,7 +91,7 @@ export function UserMenu({ user, onOpenSettings, onSignOut }: UserMenuProps) {
                 setIsOpen(false);
                 onOpenSettings();
               }}
-              className="w-full text-left px-3 py-2 text-sm text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-2"
+              className="w-full text-left px-3 py-2 text-sm text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-2"
             >
               <Settings className="w-4 h-4 text-slate-500 dark:text-slate-400" />
               Settings

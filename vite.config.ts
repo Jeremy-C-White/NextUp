@@ -28,7 +28,23 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-          navigateFallback: 'index.html'
+          navigateFallback: 'index.html',
+          runtimeCaching: [
+            {
+              urlPattern: ({ url, request }) => request.destination === 'image' &&
+                (url.hostname === 'image.tmdb.org' || url.hostname === 'static.tvmaze.com'),
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'nextup-artwork-v1',
+                cacheableResponse: { statuses: [0, 200] },
+                expiration: {
+                  maxEntries: 180,
+                  maxAgeSeconds: 30 * 24 * 60 * 60,
+                  purgeOnQuotaError: true
+                }
+              }
+            }
+          ]
         }
       })
     ],

@@ -66,4 +66,17 @@ describe('Notifications', () => {
       expect.objectContaining({ body: expect.stringContaining('has officially aired') })
     );
   });
+
+  test('does not notify for an episode that is already watched', async () => {
+    const show: UserShow = {
+      id: '1', name: 'Test Show',
+      episodes: [
+        { id: '101', name: 'Ep 1', season: 1, number: 1, airstamp: '2026-07-26T11:00:00Z', watched: true }
+      ]
+    } as any;
+
+    await checkAndNotifyUpcomingEpisodes([show]);
+
+    expect(NotificationMock).not.toHaveBeenCalled();
+  });
 });

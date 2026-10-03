@@ -105,8 +105,12 @@ export function ScrollRow({ children, storageKey }: { children: ReactNode; stora
 
   const endDrag = () => {
     // Keep `moved` true briefly so the click-capture below can swallow the click
+    // browsers synthesize after pointerup.
+    const moved = dragRef.current.moved;
     dragRef.current.down = false;
-    setTimeout(() => { dragRef.current.moved = false; }, 0);
+    if (moved) {
+      window.setTimeout(() => { dragRef.current.moved = false; }, 120);
+    }
   };
 
   const onClickCapture = (e: ReactMouseEvent) => {

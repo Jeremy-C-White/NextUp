@@ -157,7 +157,8 @@ export function fetchThroughProxy(targetUrl: string, signal?: AbortSignal): Prom
     signal
   }).then(response => {
     const contentType = response.headers?.get?.("content-type") || "";
-    const proxyIsUnavailable = response.status === 404 || response.status === 405;
+    const proxyIsUnavailable = response.status === 403 || response.status === 404 ||
+      response.status === 405 || response.status === 503;
     const proxyReturnedTheAppShell = response.ok && contentType.includes("text/html");
 
     return proxyIsUnavailable || proxyReturnedTheAppShell

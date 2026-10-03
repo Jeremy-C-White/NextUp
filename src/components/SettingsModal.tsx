@@ -21,6 +21,7 @@ import {
   saveOpenSubtitlesApiKey,
   testOpenSubtitlesApiKey
 } from '../lib/externalSubtitles';
+import { chunkLibraryImport, prepareLibraryImport } from '../lib/backupImport';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -256,26 +257,20 @@ export function SettingsModal({
 
     try {
       const text = await file.text();
-      const importedData = JSON.parse(text) as UserShow[];
-      
-      if (!Array.isArray(importedData)) {
-        throw new Error("Invalid backup file format. Expected an array of shows.");
-      }
-      
-      // We will batch insert the shows
-      const batch = writeBatch(db);
-      let count = 0;
-      
-      for (const show of importedData) {
-        if (!show.id || !show.name) continue; // Basic validation
-        const showRef = doc(db, `users/${user.uid}/shows/${show.id}`);
-        batch.set(showRef, show, { merge: true }); // Merge to avoid completely deleting fields if schema changed
-        count++;
-      }
-      
-      if (count > 0) {
-        await batch.commit();
-        setImportStatus({ type: 'success', message: `Successfully restored ${count} shows.` });
+      const importedShows = prepareLibraryImport(JSON.parse(text));
+
+      if (importedShows.length > 0) {
+        // Firestore limits one write batch to 500 operations. Keep headroom for
+        // future per-show writes and commit large personal backups in chunks.
+        for (const showChunk of chunkLibraryImport(importedShows)) {
+          const batch = writeBatch(db);
+          for (const show of showChunk) {
+            const showRef = doc(db, `users/${user.uid}/shows/${show.id}`);
+            batch.set(showRef, show, { merge: true });
+          }
+          await batch.commit();
+        }
+        setImportStatus({ type: 'success', message: `Successfully restored ${importedShows.length} shows.` });
       } else {
         setImportStatus({ type: 'error', message: 'No valid shows found in backup file.' });
       }

@@ -40,6 +40,7 @@ import { findNextReleasedEpisode } from "./lib/autoplay";
 import { rankUpNextItems } from "./lib/upNext";
 import { buildEpisodeBacklog } from "./lib/episodeBacklog";
 import { buildEpisodeProgressSelection } from "./lib/episodeProgress";
+import { preserveLatestEpisodeWatchState } from "./lib/episodeReconciliation";
 import { buildPlaybackPercentageIndex, clearPlaybackProgress, getResumePosition, readPlaybackProgress } from "./lib/playbackProgress";
 import { resolveBackAction, shouldIgnoreBackPress } from "./lib/backNavigation";
 import {
@@ -214,8 +215,12 @@ function ScrollRow({ children, storageKey }: { children: ReactNode; storageKey?:
 
   const endDrag = () => {
     // Keep `moved` true briefly so the click-capture below can swallow the click
+    // browsers synthesize after pointerup.
+    const moved = dragRef.current.moved;
     dragRef.current.down = false;
-    setTimeout(() => { dragRef.current.moved = false; }, 0);
+    if (moved) {
+      window.setTimeout(() => { dragRef.current.moved = false; }, 120);
+    }
   };
 
   const onClickCapture = (e: ReactMouseEvent) => {
@@ -999,7 +1004,10 @@ const loadWithFallback = async (
              try {
                const eps = await getShowEpisodes(id, show.watchedEpisodes || {}, show.isMovie, show.premiered);
                if (currentGen === generationRef.current) {
-                 setEpisodesMap(current => ({ ...current, [show.id]: eps }));
+                 setEpisodesMap(current => ({
+                   ...current,
+                   [show.id]: preserveLatestEpisodeWatchState(eps, current[show.id])
+                 }));
                }
                jobs.eps.lastSuccess = now;
                jobs.eps.failureCount = 0;
@@ -1380,14 +1388,14 @@ const loadWithFallback = async (
   }, [nextPlaybackRequest, playbackRequest, upNext]);
 
   const handlePlaybackCompleted = () => {
-    if (!playbackRequest || playbackRequest.isMovie) return;
+    if (!playbackRequest) return;
     const show = shows.find(candidate => candidate.id === playbackRequest.showId) ||
       (detailsShow?.id === playbackRequest.showId ? detailsShow : null);
     const currentEpisode = (episodesMap[playbackRequest.showId] || show?.episodes || [])
       .find(episode => episode.id === playbackRequest.episodeId);
 
-    if (show && currentEpisode && !currentEpisode.watched) {
-        void toggleWatched(show.id, currentEpisode.id, true);
+    if (show && !currentEpisode?.watched) {
+        void toggleWatched(show.id, playbackRequest.episodeId, true);
     }
   };
 

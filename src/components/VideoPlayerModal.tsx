@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { X, PlayCircle, PauseCircle, RefreshCcw, List, Check, Database, Film, ArrowRight, RotateCcw, SkipForward, Languages, Rewind, FastForward, Captions, ExternalLink } from "lucide-react";
+import { X, PlayCircle, PauseCircle, RefreshCcw, List, Check, Database, Film, ArrowRight, RotateCcw, SkipForward, Languages, Rewind, FastForward, Captions, ExternalLink, PictureInPicture2 } from "lucide-react";
 import { getBestAioStreamsSources } from "../lib/debrid";
 import { PlaybackRequest, PlaybackCandidate } from "../types";
 import { getTMDBExternalIds } from "../lib/tmdb";
@@ -296,6 +296,8 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   const [audioStatus, setAudioStatus] = useState("English audio preferred");
   const [subtitleStatus, setSubtitleStatus] = useState("Automatic subtitles ready");
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
+  const [isPictureInPicture, setIsPictureInPicture] = useState(false);
   const [playbackClock, setPlaybackClock] = useState({ current: 0, duration: 0, playing: false });
   const [introDBSegments, setIntroDBSegments] = useState<IntroDBSegments>({});
   const [introDBLookupStatus, setIntroDBLookupStatus] = useState<"idle" | "pending" | "done" | "failed">("idle");
@@ -654,6 +656,47 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
   useEffect(() => () => resetSubtitleAssist(), [resetSubtitleAssist]);
 
   const currentStream = playableCandidates[candidateIndex]?.url;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      setPictureInPictureSupported(false);
+      setIsPictureInPicture(false);
+      return;
+    }
+
+    const supported = typeof video.requestPictureInPicture === "function" &&
+      document.pictureInPictureEnabled !== false;
+    setPictureInPictureSupported(supported);
+
+    const handleEnter = () => setIsPictureInPicture(true);
+    const handleLeave = () => setIsPictureInPicture(false);
+    video.addEventListener("enterpictureinpicture", handleEnter);
+    video.addEventListener("leavepictureinpicture", handleLeave);
+    setIsPictureInPicture(document.pictureInPictureElement === video);
+
+    return () => {
+      video.removeEventListener("enterpictureinpicture", handleEnter);
+      video.removeEventListener("leavepictureinpicture", handleLeave);
+    };
+  }, [currentStream, sourceValidated]);
+
+  const togglePictureInPicture = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || typeof video.requestPictureInPicture !== "function") return;
+
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else {
+        await video.requestPictureInPicture();
+      }
+    } catch (error) {
+      console.warn("Picture-in-Picture is unavailable for this source", error);
+    } finally {
+      showControlsTemporarily();
+    }
+  }, [showControlsTemporarily]);
 
   const openSourceSelector = useCallback(() => {
     setShowSourceSelector(true);
@@ -2304,6 +2347,16 @@ export function VideoPlayerModal({ request, nextRequest, alternativeRequests, ba
                     >
                       <SkipForward className="w-4 h-4" />
                       Next episode
+                    </button>
+                  )}
+                  {pictureInPictureSupported && sourceValidated && (
+                    <button
+                      onClick={togglePictureInPicture}
+                      aria-pressed={isPictureInPicture}
+                      className="shrink-0 min-h-10 w-max px-3 sm:px-4 py-2 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white rounded-full text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 backdrop-blur-md border border-white/10"
+                    >
+                      <PictureInPicture2 className="w-4 h-4" />
+                      {isPictureInPicture ? "Exit PiP" : "Picture in Picture"}
                     </button>
                   )}
                   <span className="hidden sm:flex w-max px-3 py-2 bg-emerald-500/15 border border-emerald-500/25 text-emerald-200 rounded-full text-sm font-semibold items-center gap-2">
