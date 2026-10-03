@@ -1516,22 +1516,6 @@
     transform-origin: 70% 100%;
   }
 
-  [data-phone-hero-swipe="next"] {
-    animation: phone-hero-enter-next 320ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  [data-phone-hero-swipe="previous"] {
-    animation: phone-hero-enter-previous 320ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  [data-phone-hero-swipe] [data-phone-card-settle] {
-    animation: phone-card-content-settle 330ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  [data-phone-hero-swipe] [data-phone-card-settle="episode"] { animation-delay: 42ms; }
-  [data-phone-hero-swipe] [data-phone-card-settle="meta"] { animation-delay: 60ms; }
-  [data-phone-hero-swipe] [data-phone-card-settle="action"] { animation-delay: 78ms; }
-
   .nextup-cinema [data-tv-ambient] canvas {
     transition-duration: 520ms;
   }
@@ -1725,27 +1709,7 @@
   }
 }
 
-@keyframes phone-hero-enter-next {
-  from { opacity: 1; transform: translate3d(4%, 0, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
-}
-
-@keyframes phone-hero-enter-previous {
-  from { opacity: 1; transform: translate3d(-4%, 0, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
-}
-
-@keyframes phone-card-content-settle {
-  from { opacity: 1; transform: translate3d(0, 8px, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  [data-phone-hero-swipe] {
-    animation: none !important;
-  }
-
-  [data-phone-hero-swipe] [data-phone-card-settle],
   [data-phone-up-next-fan-card],
   [data-phone-up-next-stack] > [data-tv-up-next-hero-content],
   [data-tv-bottom-nav] button svg,

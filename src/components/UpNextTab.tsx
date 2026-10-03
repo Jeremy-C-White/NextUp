@@ -34,6 +34,17 @@ interface PhoneUpNextFanCardProps {
   getResumePosition: (showId: string, episodeId: string) => number | null;
 }
 
+function formatHeroEpisodeLabel(show: UserShow, episode: UserEpisode): string {
+  return show.isMovie
+    ? "Feature Film"
+    : `Season ${episode.season}, Episode ${episode.number} \u00b7 ${episode.name}`;
+}
+
+function getHeroRuntimeMinutes(show: UserShow, episode: UserEpisode): number | null {
+  const runtime = Number(episode.runtime || show.runtime);
+  return Number.isFinite(runtime) && runtime > 0 ? runtime : null;
+}
+
 function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResumePosition }: PhoneUpNextFanCardProps) {
   const logo = useTitleLogo(item.show);
   const artworkUrl = optimizeArtworkUrl(item.show.backdropUrl || item.show.imageUrl);
@@ -42,9 +53,8 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
   const direction = side === "previous" ? -1 : 1;
   const resumePosition = getResumePosition(item.show.id, item.nextEp.id);
   const releaseTime = getEpisodeReleaseTime(item.nextEp);
-  const episodeLabel = item.show.isMovie
-    ? "Feature Film"
-    : `Season ${item.nextEp.season}, Episode ${item.nextEp.number} · ${item.nextEp.name}`;
+  const episodeLabel = formatHeroEpisodeLabel(item.show, item.nextEp);
+  const runtimeMinutes = getHeroRuntimeMinutes(item.show, item.nextEp);
 
   return (
     <div
@@ -90,14 +100,14 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
           headingClassName="text-3xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
         />
         <p className="text-lg font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">{episodeLabel}</p>
-        <div data-phone-fan-reserved="true" className="flex flex-wrap items-center gap-2 text-sm text-slate-300 mb-4 opacity-0">
+        <div data-phone-fan-reserved="true" className="flex flex-wrap items-center gap-2 text-sm text-slate-300 mb-4">
           {releaseTime && <span>{formatUpNextAirDate(releaseTime)}</span>}
-          {(item.nextEp.runtime || item.show.runtime) && <span>{item.nextEp.runtime || item.show.runtime} min</span>}
+          {runtimeMinutes !== null && <span>{runtimeMinutes} min</span>}
           {item.backlog.unwatchedCount > 1 && item.backlog.remainingMinutes > 0 && (
             <span>{formatCatchUpDuration(item.backlog.remainingMinutes)} to catch up</span>
           )}
         </div>
-        <div data-phone-fan-reserved="true" className="flex items-center opacity-0">
+        <div data-phone-fan-reserved="true" className="flex items-center">
           <span className="inline-flex w-full max-w-full min-h-[52px] px-5 py-3.5 bg-orange-500 text-orange-950 text-lg font-extrabold rounded-2xl items-center justify-center gap-3 whitespace-nowrap">
             <PlayCircle className="w-7 h-7" />
             {resumePosition !== null ? `Resume ${formatPlaybackPosition(resumePosition)}` : "Play"}
@@ -134,7 +144,6 @@ export function UpNextTab({
   const heroArtworkPreloadsRef = useRef(new Map<string, HTMLImageElement>());
   const [heroDragOffset, setHeroDragOffset] = useState(0);
   const [heroIsDragging, setHeroIsDragging] = useState(false);
-  const [heroTransitionDirection, setHeroTransitionDirection] = useState<-1 | 0 | 1>(0);
   const safeActiveIndex = items.length > 0 ? Math.min(activeIndex, items.length - 1) : 0;
   const activeItem = items[safeActiveIndex];
   const activeTitleLogo = useTitleLogo(activeItem?.show);
@@ -284,7 +293,6 @@ export function UpNextTab({
 
   const stepCarousel = useCallback((direction: -1 | 1) => {
     if (items.length <= 1) return;
-    setHeroTransitionDirection(direction);
     setActiveIndex(current => (current + direction + items.length) % items.length);
   }, [items.length]);
 
@@ -344,7 +352,6 @@ export function UpNextTab({
     heroDragOffsetRef.current = 0;
     blockHeroClickRef.current = false;
     setHeroIsDragging(true);
-    setHeroTransitionDirection(0);
     setHeroDragOffset(0);
   };
 
@@ -413,7 +420,7 @@ export function UpNextTab({
       window.setTimeout(() => {
         blockHeroClickRef.current = false;
       }, 350);
-    }, 180);
+    }, 200);
   };
 
   const cancelHeroTouch = () => {
@@ -480,9 +487,8 @@ export function UpNextTab({
         const { show, nextEp, queueReason, backlog } = activeItem;
         const resumePosition = getResumePosition(show.id, nextEp.id);
         const releaseTime = getEpisodeReleaseTime(nextEp);
-        const episodeLabel = show.isMovie
-          ? "Feature Film"
-          : `Season ${nextEp.season}, Episode ${nextEp.number} \u00b7 ${nextEp.name}`;
+        const episodeLabel = formatHeroEpisodeLabel(show, nextEp);
+        const runtimeMinutes = getHeroRuntimeMinutes(show, nextEp);
         const visibleThumbnailCount = railItems.length > 3
           ? 3.35
           : Math.max(1, railItems.length);
@@ -539,12 +545,10 @@ export function UpNextTab({
               <div
                 key={`${show.id}:${nextEp.id}`}
                 data-tv-up-next-hero-content="true"
-                data-phone-hero-swipe={heroTransitionDirection === 1 ? "next" : heroTransitionDirection === -1 ? "previous" : undefined}
                 className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging ? "transition-none" : "transition-transform duration-200 ease-out"}`}
                 style={heroDragOffset !== 0 ? {
                   transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg)`
                 } : undefined}
-                onAnimationEnd={() => setHeroTransitionDirection(0)}
               >
                 {show.backdropUrl || show.imageUrl ? (
                   <img
@@ -585,7 +589,7 @@ export function UpNextTab({
 
                   <div data-tv-hero-meta="true" data-phone-card-settle="meta" className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm sm:text-base text-slate-300 mb-4">
                     {releaseTime && <span>{formatUpNextAirDate(releaseTime)}</span>}
-                    {(nextEp.runtime || show.runtime) && <span>{nextEp.runtime || show.runtime} min</span>}
+                    {runtimeMinutes !== null && <span>{runtimeMinutes} min</span>}
                     {backlog.unwatchedCount > 1 && backlog.remainingMinutes > 0 && (
                       <span>{formatCatchUpDuration(backlog.remainingMinutes)} to catch up</span>
                     )}
