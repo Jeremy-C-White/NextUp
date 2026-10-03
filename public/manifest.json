@@ -1,6 +1,6 @@
 {
-  "name": "NextUp Phone",
-  "short_name": "Phone",
+  "name": "NextUp",
+  "short_name": "NextUp",
   "description": "NextUp v1.0.59 features with MP4-first phone playback.",
   "start_url": ".",
   "scope": ".",

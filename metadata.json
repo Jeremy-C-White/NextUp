@@ -1,5 +1,5 @@
 {
-  "name": "NextUp Phone",
+  "name": "NextUp",
   "description": "NextUp v1.0.59 features with MP4-first phone playback",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

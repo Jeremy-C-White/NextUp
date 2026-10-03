@@ -13,8 +13,8 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'prompt',
         manifest: {
-          name: 'NextUp Phone',
-          short_name: 'Phone',
+          name: 'NextUp',
+          short_name: 'NextUp',
           description: 'NextUp v1.0.59 with MP4/HLS-first phone playback and VLC fallback for MKV.',
           start_url: '.',
           scope: '.',
