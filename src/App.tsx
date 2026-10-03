@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, lazy, Suspense, useMemo, useRef } from "react";
-import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { LibraryTab } from "./components/LibraryTab";
 import { UpNextTab } from "./components/UpNextTab";
@@ -1663,20 +1663,11 @@ const loadWithFallback = async (
       : activeTab === "coming"
         ? "[data-tv-focus-key^='recently-aired:'], [data-tv-focus-key^='coming:']"
         : "[data-tv-focus-key^='library:'], [data-tv-section='library-controls'] button";
-  const bottomNavActiveIndex = activeTab === "up-next"
-    ? 0
-    : activeTab === "discover"
-      ? 1
-      : activeTab === "coming"
-        ? 3
-        : 4;
-
   if (loading) {
     return (
       <div className="min-h-dvh bg-slate-50 dark:bg-slate-950 pb-24 font-sans text-slate-900 dark:text-white p-4 max-w-7xl mx-auto md:p-8 pt-12 md:pt-16">
-        <h1 className="text-4xl md:text-5xl font-display font-bold mb-8 text-slate-900 dark:text-white">
-          Next<span className="text-orange-500">Up</span>{" "}
-          <span className="align-middle text-[0.42em] uppercase tracking-[0.2em] text-orange-500">Phone</span>
+        <h1 className="text-4xl md:text-5xl font-display font-bold mb-8 text-slate-900 dark:text-white tracking-tight">
+          Next<span className="bg-gradient-to-r from-orange-400 to-orange-600 bg-clip-text font-black italic text-transparent">Up</span>
         </h1>
         <div className="flex gap-4 mb-8">
           <div className="w-24 h-10 bg-white dark:bg-slate-900 rounded-full animate-pulse" />
@@ -1719,13 +1710,9 @@ const loadWithFallback = async (
           <div data-tv-brand-mark="true" className="w-10 h-10 bg-gradient-to-br from-orange-400 to-orange-600 rounded-xl flex items-center justify-center shadow-lg shadow-orange-500/20">
             <Tv className="w-5 h-5 text-slate-950" />
           </div>
-          <div>
-            <h1 className="text-slate-900 dark:text-white font-display font-bold text-lg leading-tight tracking-tight">
-              Next<span className="text-orange-500">Up</span>{" "}
-              <span className="align-middle text-[9px] uppercase tracking-[0.16em] text-orange-500">Phone</span>
-            </h1>
-            <p data-tv-brand-tagline="true" className="text-slate-500 dark:text-slate-400 text-[11px] font-sans tracking-wide">Shows you love in one place.</p>
-          </div>
+          <h1 className="font-display text-xl font-bold leading-none tracking-[-0.04em] text-slate-900 dark:text-white">
+            Next<span className="bg-gradient-to-r from-orange-400 to-orange-600 bg-clip-text font-black italic text-transparent">Up</span>
+          </h1>
         </div>
         
         <div className="flex items-center gap-3">
@@ -2089,10 +2076,8 @@ const loadWithFallback = async (
       <div data-tv-bottom-nav-shell="true" className="fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 pb-[env(safe-area-inset-bottom)] z-40">
         <div
           data-tv-bottom-nav="true"
-          className="flex justify-around items-center px-2 py-2 max-w-md mx-auto"
-          style={{ "--phone-nav-index": bottomNavActiveIndex } as CSSProperties}
+          className="flex items-center px-2 py-2 max-w-md mx-auto"
         >
-          <span data-phone-nav-indicator="true" className="md:hidden" aria-hidden="true" />
           {[
             { id: "up-next", label: "Next Up", icon: PlayCircle },
             { id: "discover", label: "Discover", icon: Compass },
