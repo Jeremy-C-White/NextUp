@@ -91,17 +91,15 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
       <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/72 to-slate-950/15" />
       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/28 to-transparent" />
       <div data-phone-up-next-fan-copy="true" className="absolute inset-0 z-10 h-full p-5 flex flex-col justify-end max-w-full pointer-events-none">
-        <div data-phone-card-settle="eyebrow" className="flex flex-wrap items-center gap-3 mb-3">
-          <span className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">
-            {item.queueReason}
-          </span>
-        </div>
         <HeroTitle
           key={`${item.show.id}:${logo?.url || "text"}`}
           name={item.show.name}
           logo={logo}
           headingClassName="text-3xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
         />
+        <div data-phone-up-next-reason="true" className="mb-2 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-300/70">
+          {item.queueReason}
+        </div>
         <p className="text-lg font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">{episodeLabel}</p>
         <div data-phone-fan-reserved="true" className="flex flex-wrap items-center gap-2 text-sm text-slate-300 mb-4">
           {releaseTime && <span>{formatUpNextAirDate(releaseTime)}</span>}
@@ -598,7 +596,7 @@ export function UpNextTab({
                   </span>
                 )}
                 <div data-tv-up-next-hero-copy="true" className="relative z-10 h-full p-5 sm:p-7 md:p-9 flex flex-col justify-end max-w-full sm:max-w-[88%] pointer-events-none">
-                  <div data-phone-card-settle="eyebrow" className="flex flex-wrap items-center gap-3 mb-3">
+                  <div data-phone-card-settle="eyebrow" className="hidden md:flex flex-wrap items-center gap-3 mb-3">
                     <span data-tv-hero-eyebrow="true" className="px-3 py-1.5 rounded-lg bg-orange-500 text-orange-950 text-xs font-extrabold uppercase tracking-wider">{queueReason}</span>
                   </div>
 
@@ -609,6 +607,9 @@ export function UpNextTab({
                       logo={activeTitleLogo}
                       headingClassName="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
                     />
+                  </div>
+                  <div data-phone-card-settle="reason" className="md:hidden mb-2 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-300/70">
+                    {queueReason}
                   </div>
                   <p data-phone-card-settle="episode" className="text-lg md:text-xl font-semibold text-slate-100 mb-4 drop-shadow line-clamp-2">
                     {episodeLabel}
