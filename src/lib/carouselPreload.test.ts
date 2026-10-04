@@ -19,4 +19,10 @@ describe("getAdjacentCarouselIndexes", () => {
     expect(getAdjacentCarouselIndexes(0, 1)).toEqual([]);
     expect(getAdjacentCarouselIndexes(0, 0)).toEqual([]);
   });
+
+  it("preloads the next layer of cards without duplicates", () => {
+    expect(getAdjacentCarouselIndexes(2, 6, 2)).toEqual([1, 3, 0, 4]);
+    expect(getAdjacentCarouselIndexes(0, 4, 2)).toEqual([3, 1, 2]);
+    expect(getAdjacentCarouselIndexes(0, 3, 2)).toEqual([2, 1]);
+  });
 });

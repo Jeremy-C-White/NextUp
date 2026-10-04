@@ -1423,13 +1423,14 @@
     min-height: 0;
     max-height: none;
     pointer-events: none;
-    will-change: transform;
+    will-change: transform, opacity;
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
     transform-style: preserve-3d;
     border-color: rgb(255 255 255 / 16%);
     box-shadow: 0 18px 42px rgb(0 0 0 / 48%), 0 0 10px rgb(249 115 22 / 3%);
     filter: saturate(0.94) brightness(0.94);
+    animation: phone-fan-card-arrive 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   [data-phone-up-next-stack] [data-tv-up-next-hero-copy],
@@ -1694,6 +1695,11 @@
 @keyframes phone-title-logo-in {
   from { opacity: 0; transform: translate3d(0, 6px, 0) scale(0.985); }
   to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes phone-fan-card-arrive {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
 }
 
 @media (max-width: 359px) {

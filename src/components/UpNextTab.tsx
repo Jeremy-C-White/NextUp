@@ -70,7 +70,7 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
         transform: `translate3d(${direction * 14 * restingAmount}px, ${7 * restingAmount}px, 0) rotate(${direction * 2.6 * restingAmount}deg) scale(${cardScale})`,
         transition: isDragging
           ? "border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
-          : "transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
+          : "transform 320ms cubic-bezier(0.16, 1, 0.3, 1), border-color 240ms ease, box-shadow 240ms ease, filter 240ms ease"
       }}
     >
       {artworkUrl ? (
@@ -97,6 +97,7 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
           </span>
         </div>
         <HeroTitle
+          key={`${item.show.id}:${logo?.url || "text"}`}
           name={item.show.name}
           logo={logo}
           headingClassName="text-3xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
@@ -179,7 +180,7 @@ export function UpNextTab({
   }, [items, safeActiveIndex]);
 
   const adjacentHeroArtworkUrls = useMemo(() => {
-    const urls = getAdjacentCarouselIndexes(safeActiveIndex, items.length)
+    const urls = getAdjacentCarouselIndexes(safeActiveIndex, items.length, 2)
       .map(index => items[index]?.show)
       .map(show => show ? optimizeArtworkUrl(show.backdropUrl || show.imageUrl) : "")
       .filter((url): url is string => !!url);
@@ -264,15 +265,23 @@ export function UpNextTab({
   useEffect(() => {
     if (!items.length) return;
     const controller = new AbortController();
-    const prioritized = [
-      ...getAdjacentCarouselIndexes(safeActiveIndex, items.length).map(index => items[index]),
-      ...items
-    ]
-      .filter((item, index, all) => item && all.findIndex(other => other.show.id === item.show.id) === index)
-      .map(item => item.show);
+    const nearbyIds = new Set<string>();
+    const nearbyShows = getAdjacentCarouselIndexes(safeActiveIndex, items.length, 2)
+      .map(index => items[index]?.show)
+      .filter((show): show is UserShow => Boolean(show))
+      .filter(show => {
+        if (nearbyIds.has(show.id)) return false;
+        nearbyIds.add(show.id);
+        return true;
+      });
+    const remainingShows = items
+      .map(item => item.show)
+      .filter((show, index, all) => !nearbyIds.has(show.id) && all.findIndex(other => other.id === show.id) === index);
+
+    void prefetchTitleLogos(nearbyShows, controller.signal);
     const timer = window.setTimeout(() => {
-      void prefetchTitleLogos(prioritized, controller.signal);
-    }, 900);
+      void prefetchTitleLogos(remainingShows, controller.signal);
+    }, 1_000);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
@@ -437,7 +446,7 @@ export function UpNextTab({
       window.setTimeout(() => {
         blockHeroClickRef.current = false;
       }, 350);
-    }, 200);
+    }, 320);
   };
 
   const cancelHeroTouch = () => {
@@ -529,7 +538,7 @@ export function UpNextTab({
             >
               {fanItems.map(({ item, index, side }) => (
                 <PhoneUpNextFanCard
-                  key={`fan:${side}:${item.show.id}:${item.nextEp.id}`}
+                  key={`fan:${side}`}
                   item={item}
                   index={index}
                   side={side}
@@ -562,7 +571,7 @@ export function UpNextTab({
               <div
                 data-tv-up-next-hero-content="true"
                 data-phone-swipe-handoff={heroIsCommitting ? "true" : "false"}
-                className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging || heroIsCommitting ? "transition-none" : "transition-transform duration-200 ease-out"}`}
+                className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging || heroIsCommitting ? "transition-none" : "transition-transform duration-[320ms] ease-out"}`}
                 style={heroDragOffset !== 0 ? {
                   transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg)`
                 } : undefined}
