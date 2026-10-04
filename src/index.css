@@ -1107,7 +1107,7 @@
     min-height: 0;
     min-width: 0;
     grid-template-columns: minmax(0, 1fr);
-    overflow: hidden;
+    overflow: visible;
     margin: 0;
     padding-top: 0.7rem !important;
     padding-bottom: 0.45rem !important;
@@ -1131,7 +1131,7 @@
     min-height: 0;
     min-width: 0;
     grid-template-rows: auto minmax(0, 1fr);
-    overflow: hidden;
+    overflow: visible;
   }
 
   .nextup-cinema.tv-up-next-shell [data-tv-up-next-stage] {
@@ -1144,7 +1144,7 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto auto;
     gap: 0.45rem !important;
-    overflow: hidden !important;
+    overflow: visible !important;
   }
 
   [data-tv-hero-title] {
@@ -1389,16 +1389,18 @@
     box-sizing: border-box;
     align-self: stretch;
     height: 100%;
-    width: 100%;
-    max-width: 100%;
+    width: calc(100% - 2.5rem);
+    max-width: 25.5rem;
     min-height: 0 !important;
     min-width: 0;
-    overflow: hidden !important;
+    justify-self: center;
+    margin-inline: auto;
+    overflow: visible !important;
   }
 
   [data-phone-up-next-stack] > [data-tv-up-next-hero-content] {
     box-sizing: border-box;
-    inset: 0.45rem 0.7rem;
+    inset: 0.45rem 0;
     width: auto;
     min-width: 0;
     max-width: none;
@@ -1413,7 +1415,7 @@
 
   [data-phone-up-next-fan-card] {
     box-sizing: border-box;
-    inset: 0.45rem 0.7rem;
+    inset: 0.45rem 0;
     width: auto;
     min-width: 0;
     max-width: none;

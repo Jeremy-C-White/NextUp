@@ -51,6 +51,8 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
   const isRevealed = side === "previous" ? dragOffset > 0 : dragOffset < 0;
   const revealProgress = isRevealed ? Math.min(1, Math.abs(dragOffset) / 240) : 0;
   const direction = side === "previous" ? -1 : 1;
+  const restingAmount = 1 - revealProgress;
+  const cardScale = 0.965 + revealProgress * 0.035;
   const resumePosition = getResumePosition(item.show.id, item.nextEp.id);
   const releaseTime = getEpisodeReleaseTime(item.nextEp);
   const episodeLabel = formatHeroEpisodeLabel(item.show, item.nextEp);
@@ -65,7 +67,7 @@ function PhoneUpNextFanCard({ item, index, side, dragOffset, isDragging, getResu
       className="absolute overflow-hidden rounded-3xl border border-white/25 bg-[#050811] shadow-2xl md:hidden"
       style={{
         zIndex: isRevealed ? 2 : 1,
-        transform: `translate3d(${direction * 7.2 * (1 - revealProgress)}px, ${5.6 * (1 - revealProgress)}px, 0) rotate(${direction * 2.75 * (1 - revealProgress)}deg)`,
+        transform: `translate3d(${direction * 14 * restingAmount}px, ${7 * restingAmount}px, 0) rotate(${direction * 2.6 * restingAmount}deg) scale(${cardScale})`,
         transition: isDragging
           ? "border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
           : "transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 180ms ease, filter 180ms ease"
@@ -137,6 +139,7 @@ export function UpNextTab({
   const heroDragOffsetRef = useRef(0);
   const blockHeroClickRef = useRef(false);
   const swipeCommitTimerRef = useRef<number | null>(null);
+  const swipeHandoffFrameRef = useRef<number | null>(null);
   const thumbnailRailRef = useRef<HTMLDivElement>(null);
   const phoneStripRef = useRef<HTMLDivElement>(null);
   const carouselWheelStateRef = useRef(createCarouselWheelState());
@@ -144,6 +147,7 @@ export function UpNextTab({
   const heroArtworkPreloadsRef = useRef(new Map<string, HTMLImageElement>());
   const [heroDragOffset, setHeroDragOffset] = useState(0);
   const [heroIsDragging, setHeroIsDragging] = useState(false);
+  const [heroIsCommitting, setHeroIsCommitting] = useState(false);
   const safeActiveIndex = items.length > 0 ? Math.min(activeIndex, items.length - 1) : 0;
   const activeItem = items[safeActiveIndex];
   const activeTitleLogo = useTitleLogo(activeItem?.show);
@@ -240,6 +244,7 @@ export function UpNextTab({
   useEffect(() => () => {
     heroArtworkPreloadsRef.current.clear();
     if (swipeCommitTimerRef.current !== null) window.clearTimeout(swipeCommitTimerRef.current);
+    if (swipeHandoffFrameRef.current !== null) window.cancelAnimationFrame(swipeHandoffFrameRef.current);
     setAmbientArtwork(null);
   }, []);
 
@@ -342,6 +347,11 @@ export function UpNextTab({
       window.clearTimeout(swipeCommitTimerRef.current);
       swipeCommitTimerRef.current = null;
     }
+    if (swipeHandoffFrameRef.current !== null) {
+      window.cancelAnimationFrame(swipeHandoffFrameRef.current);
+      swipeHandoffFrameRef.current = null;
+    }
+    setHeroIsCommitting(false);
     heroTouchStartRef.current = {
       x: touch.clientX,
       y: touch.clientY,
@@ -415,8 +425,15 @@ export function UpNextTab({
     swipeCommitTimerRef.current = window.setTimeout(() => {
       swipeCommitTimerRef.current = null;
       heroDragOffsetRef.current = 0;
+      setHeroIsCommitting(true);
       setHeroDragOffset(0);
       stepCarousel(direction);
+      swipeHandoffFrameRef.current = window.requestAnimationFrame(() => {
+        swipeHandoffFrameRef.current = window.requestAnimationFrame(() => {
+          swipeHandoffFrameRef.current = null;
+          setHeroIsCommitting(false);
+        });
+      });
       window.setTimeout(() => {
         blockHeroClickRef.current = false;
       }, 350);
@@ -543,9 +560,9 @@ export function UpNextTab({
               />
 
               <div
-                key={`${show.id}:${nextEp.id}`}
                 data-tv-up-next-hero-content="true"
-                className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging ? "transition-none" : "transition-transform duration-200 ease-out"}`}
+                data-phone-swipe-handoff={heroIsCommitting ? "true" : "false"}
+                className={`absolute inset-0 z-10 overflow-hidden rounded-3xl md:rounded-[2rem] border border-slate-700 bg-slate-950 shadow-xl md:border-0 md:shadow-none will-change-transform ${heroIsDragging || heroIsCommitting ? "transition-none" : "transition-transform duration-200 ease-out"}`}
                 style={heroDragOffset !== 0 ? {
                   transform: `translate3d(${heroDragOffset}px, 0, 0) rotate(${heroDragOffset / Math.max(window.innerWidth, 1) * 4}deg)`
                 } : undefined}
@@ -578,6 +595,7 @@ export function UpNextTab({
 
                   <div>
                     <HeroTitle
+                      key={`${show.id}:${activeTitleLogo?.url || "text"}`}
                       name={show.name}
                       logo={activeTitleLogo}
                       headingClassName="text-3xl sm:text-4xl md:text-5xl font-display font-bold text-white leading-none tracking-tight mb-3 drop-shadow-lg line-clamp-2"
